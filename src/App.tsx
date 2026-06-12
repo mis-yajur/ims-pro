@@ -53,7 +53,7 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans antialiased text-slate-800">
       {/* Top Header Navigation */}
       <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="max-w-full mx-auto px-4 md:px-8 lg:px-10">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center gap-8">
               {/* Logo / Title branding */}
@@ -134,7 +134,7 @@ export default function App() {
       </header>
 
       {/* Main workspace container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="flex-1 max-w-full w-full mx-auto px-4 md:px-8 lg:px-10 py-8">
         {showConfigAlert && (
           <div className="mb-6 p-4 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-sm font-semibold flex items-center gap-3">
             <Globe className="w-5 h-5 flex-shrink-0 animate-pulse" />
