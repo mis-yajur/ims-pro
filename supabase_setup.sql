@@ -190,7 +190,7 @@ sku_details AS (
             0
         ) as master_price
     FROM all_skus s
-    LEFT JOIN item_master im ON s.sku = im.sku
+    LEFT OUTER JOIN item_master im ON s.sku = im.sku
     LEFT JOIN (
         SELECT DISTINCT ON (sku) sku, item_name, unit, department, quantity, stock_value
         FROM closing_stock
@@ -324,7 +324,7 @@ BEGIN
                 0
             ) as master_price
         FROM all_skus s
-        LEFT JOIN item_master im ON s.sku = im.sku
+        LEFT OUTER JOIN item_master im ON s.sku = im.sku
         LEFT JOIN (
             SELECT DISTINCT ON (sku) sku, item_name, unit, department, quantity, stock_value
             FROM closing_stock
