@@ -1,0 +1,6 @@
+{
+  "name": "IMS Pro - Inventory Management System",
+  "description": "High-performance Inventory Management System synced with Supabase for real-time tracking, safety factor analysis, reordering, and department-wise valuation reports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
