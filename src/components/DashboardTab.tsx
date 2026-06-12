@@ -44,7 +44,24 @@ export default function DashboardTab({ onSwitchTab, onShowAddTransaction, onRunR
   async function loadDashboardData() {
     setLoading(true);
     try {
-      // 1. Fetch Latest Stock items with all metadata for safety stock calculations
+      // 1. Fetch manual Transactions with SKU, IN/OUT status, and Date
+      const io: Transaction[] = await fetchAllRows("in_out_manual", "sku,in_out,quantity,stock_value,date");
+
+      // Filter to find all active SKUs in the last 6 months
+      const activeSkusInLast6Months = new Set<string>();
+      const sixMonthsAgo = new Date();
+      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+      io.forEach((tx) => {
+        if (tx.sku && tx.date) {
+          const txDate = new Date(tx.date);
+          if (txDate >= sixMonthsAgo) {
+            activeSkusInLast6Months.add(tx.sku);
+          }
+        }
+      });
+
+      // 2. Fetch Latest Stock items with all metadata for safety stock calculations
       const ls: LatestStockItem[] = await fetchAllRows("latest_stock", "*");
 
       const totalValue = ls.reduce((sum, item) => sum + (Number(item.stock_value) || 0), 0);
@@ -53,19 +70,21 @@ export default function DashboardTab({ onSwitchTab, onShowAddTransaction, onRunR
       const activeSKU = ls.filter((item) => Number(item.quantity) > 0).length;
 
       // Identify items below safety stock:
-      // Safety Stock is calculated and stored in current safety_factor column at database layer
+      // Safety Stock is calculated and stored in current safety_factor column at database layer.
+      // Filter also by activeSkusInLast6Months as explicitly requested.
       const critical = ls.map((item) => {
         const safetyStock = Number(item.safety_factor) || 0;
         return {
           ...item,
           safetyStock,
         };
-      }).filter((item) => item.safetyStock > 0 && Number(item.quantity) < item.safetyStock);
+      }).filter((item) => 
+        item.safetyStock > 0 && 
+        Number(item.quantity) < item.safetyStock &&
+        activeSkusInLast6Months.has(item.sku)
+      );
 
       setCriticalItems(critical);
-
-      // 2. Fetch manual Transactions
-      const io: Transaction[] = await fetchAllRows("in_out_manual", "in_out,quantity,stock_value,date");
 
       const totalInQty = io.filter((r) => r.in_out === "In").reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
       const totalInVal = io.filter((r) => r.in_out === "In").reduce((sum, r) => sum + (Number(r.stock_value) || 0), 0);

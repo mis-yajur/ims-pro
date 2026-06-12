@@ -343,7 +343,7 @@ export default function SafetyFactorTab() {
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-6">
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">
-                  Average Daily Usage
+                  Avg Daily Material Out (ADU)
                 </label>
                 <input
                   type="number"
@@ -355,7 +355,7 @@ export default function SafetyFactorTab() {
 
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">
-                  Maximum Daily Usage
+                  Max Daily Material Out (MDU)
                 </label>
                 <input
                   type="number"
@@ -470,7 +470,7 @@ export default function SafetyFactorTab() {
                 <span className="p-1.5 bg-indigo-500/10 text-indigo-400 rounded-lg">
                   <Info className="w-4 h-4" />
                 </span>
-                <span className="text-xs font-bold tracking-widest uppercase text-slate-400">Formula System Blueprint</span>
+                <span className="text-xs font-bold tracking-widest uppercase text-slate-400">Material Out-Based Blueprint</span>
               </div>
 
               <div className="space-y-4 text-xs text-slate-350">
@@ -480,7 +480,7 @@ export default function SafetyFactorTab() {
                     <span className="text-[10px] text-indigo-400 font-mono">Buffer</span>
                   </div>
                   <p className="font-mono text-[10px] text-slate-400 mt-1 bg-slate-950/40 p-1.5 rounded text-center">
-                    (Maximum Daily Usage - Average Daily Usage) × Lead Time
+                    (Max Daily Material Out - Avg Daily Material Out) × Lead Time
                   </p>
                   <p className="mt-1 text-[10px] leading-relaxed text-slate-400">Precludes shutdown states resulting from material delivery delays.</p>
                 </div>
@@ -491,7 +491,7 @@ export default function SafetyFactorTab() {
                     <span className="text-[10px] text-indigo-400 font-mono">Trigger</span>
                   </div>
                   <p className="font-mono text-[10px] text-slate-400 mt-1 bg-slate-950/40 p-1.5 rounded text-center">
-                    (Average Daily Usage × Lead Time) + Safety Stock
+                    (Avg Daily Material Out × Lead Time) + Safety Stock
                   </p>
                   <p className="mt-1 text-[10px] leading-relaxed text-slate-400">Indicates precise boundary representing correct moment to order.</p>
                 </div>
@@ -502,7 +502,7 @@ export default function SafetyFactorTab() {
                     <span className="text-[10px] text-indigo-400 font-mono">Control</span>
                   </div>
                   <p className="font-mono text-[10px] text-slate-400 mt-1 bg-slate-950/40 p-1.5 rounded text-center">
-                    Inventory Days = Current Stock ÷ Average Daily Usage
+                    Inventory Days = Current Stock ÷ Avg Daily Material Out
                   </p>
                   <p className="mt-1 text-[10px] leading-relaxed text-slate-400">Overstock occurs when stock holds coverage exceeding set target days limit.</p>
                 </div>
@@ -673,8 +673,8 @@ export default function SafetyFactorTab() {
                 <th className="px-5 py-4 text-left">Item Description</th>
                 <th className="px-5 py-4 text-left">Dept</th>
                 <th className="px-5 py-4 text-right">Current Stock</th>
-                <th className="px-4 py-4 text-right">Avg Daily (ADU)</th>
-                <th className="px-4 py-4 text-right">Max Daily (MDU)</th>
+                <th className="px-4 py-4 text-right">Avg Out (ADU)</th>
+                <th className="px-4 py-4 text-right">Max Out (MDU)</th>
                 <th className="px-4 py-3.5 text-center">Lead Time</th>
                 <th className="px-5 py-4 text-right font-bold text-indigo-650">Safety Stock</th>
                 <th className="px-5 py-4 text-right font-bold text-indigo-650">Reorder Level</th>
