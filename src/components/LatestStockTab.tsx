@@ -82,7 +82,7 @@ export default function LatestStockTab() {
       let filtered = allMatching;
       if (filters.status !== "All") {
         filtered = allMatching.filter((item) => {
-          const status = getStockStatus(Number(item.quantity || 0), Number(item.max_level || 0));
+          const status = getStockStatus(Number(item.quantity || 0), Number(item.safety_factor || 0), Number(item.moq || 0));
           return status === filters.status;
         });
       }
@@ -146,8 +146,7 @@ export default function LatestStockTab() {
 
       data.forEach((r) => {
         const qty = Number(r.quantity) || 0;
-        const maxL = Number(r.max_level) || 0;
-        const status = getStockStatus(qty, maxL);
+        const status = getStockStatus(qty, Number(r.safety_factor || 0), Number(r.moq || 0));
 
         csv += `"${r.sku}","${r.item_name}","${r.unit || ""}","${r.department || ""}",${r.quantity},${r.stock_value},${r.price},${r.avg_daily_consumption},${r.lead_time},${r.safety_factor},${r.moq},${r.max_level},"${status.toUpperCase()}"\n`;
       });
@@ -178,12 +177,11 @@ export default function LatestStockTab() {
     }
   }
 
-  function getStockStatus(qty: number, maxLevel: number): string {
-    if (qty <= 0) return "out-of-stock";
-    if (qty <= maxLevel * 0.1) return "critical";
-    if (qty <= maxLevel * 0.3) return "low";
-    if (qty <= maxLevel * 0.7) return "normal";
-    return "high";
+  function getStockStatus(qty: number, safetyStock: number, reorderLevel: number): string {
+    if (qty <= 0) return "Production Stop";
+    if (qty < safetyStock) return "Critical";
+    if (qty <= reorderLevel) return "Purchase Required";
+    return "Normal";
   }
 
   const totalPages = Math.ceil(totalCount / 20);
@@ -277,11 +275,10 @@ export default function LatestStockTab() {
               className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2 bg-white outline-none focus:ring-2 focus:ring-indigo-500"
             >
               <option value="All">All Levels</option>
-              <option value="out-of-stock">Out of Stock (Zero)</option>
-              <option value="critical">Critical (≤ 10%)</option>
-              <option value="low">Low (≤ 30%)</option>
-              <option value="normal">Active (≤ 70%)</option>
-              <option value="high">High Inventory (70%+)</option>
+              <option value="Production Stop">Production Stop (Zero)</option>
+              <option value="Critical">Critical (Below Safety Stock)</option>
+              <option value="Purchase Required">Purchase Required (At Reorder Level)</option>
+              <option value="Normal">Normal (Above Reorder Level)</option>
             </select>
           </div>
         </div>
@@ -382,13 +379,12 @@ export default function LatestStockTab() {
                 </tr>
               ) : stockItems.length > 0 ? (
                 stockItems.map((item) => {
-                  const status = getStockStatus(Number(item.quantity || 0), Number(item.max_level || 0));
+                  const status = getStockStatus(Number(item.quantity || 0), Number(item.safety_factor || 0), Number(item.moq || 0));
                   const badges: { [key: string]: string } = {
-                    "out-of-stock": "bg-rose-50 text-rose-700 border-rose-100",
-                    critical: "bg-orange-50 text-orange-700 border-orange-100",
-                    low: "bg-amber-50 text-amber-700 border-amber-100",
-                    normal: "bg-emerald-50 text-emerald-700 border-emerald-100",
-                    high: "bg-indigo-50 text-indigo-700 border-indigo-100",
+                    "Production Stop": "bg-rose-100 text-rose-800 border-rose-200 font-extrabold",
+                    "Critical": "bg-orange-100 text-orange-800 border-orange-200 font-extrabold animate-pulse",
+                    "Purchase Required": "bg-amber-100 text-amber-800 border-amber-200 font-extrabold",
+                    "Normal": "bg-emerald-100 text-emerald-800 border-emerald-200 font-bold",
                   };
 
                   return (

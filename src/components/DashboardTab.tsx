@@ -53,13 +53,9 @@ export default function DashboardTab({ onSwitchTab, onShowAddTransaction, onRunR
       const activeSKU = ls.filter((item) => Number(item.quantity) > 0).length;
 
       // Identify items below safety stock:
-      // Safety Stock = (Maximum Daily Usage - Average Daily Usage) * Lead Time
-      // where Max Daily Usage = Average Daily Usage * 1.4, Lead Time defaults to 5.
+      // Safety Stock is calculated and stored in current safety_factor column at database layer
       const critical = ls.map((item) => {
-        const adu = Number(item.avg_daily_consumption) || 0;
-        const mdu = adu * 1.4;
-        const lt = Number(item.lead_time) || 5;
-        const safetyStock = (mdu - adu) * lt;
+        const safetyStock = Number(item.safety_factor) || 0;
         return {
           ...item,
           safetyStock,

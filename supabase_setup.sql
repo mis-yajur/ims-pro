@@ -315,6 +315,7 @@ BEGIN
             COALESCE(im.item_name, lc.item_name, lm.item_name, ls.item_name, '') as item_name,
             COALESCE(im.unit, lc.unit, ls.unit, 'Nos') as unit,
             COALESCE(im.department, lc.department, lm.department, ls.department, 'General Store') as department,
+            COALESCE(ls.lead_time, 5) as lead_time,
             -- Price calculation: closing stock average price if available, else latest manual transaction price, else latest stock price
             COALESCE(
                 CASE WHEN (im.price IS NOT NULL AND im.price > 0) THEN im.price ELSE NULL END,
@@ -375,6 +376,7 @@ BEGIN
             sd.unit,
             sd.department,
             sd.master_price,
+            sd.lead_time,
             (COALESCE(lc.quantity, 0) + COALESCE(mt.total_in, 0) - COALESCE(mt.total_out, 0)) as calc_qty,
             COALESCE(cc.total_consumed / cc.days_count, 0) as calc_avg_cons
         FROM sku_details sd
@@ -392,10 +394,14 @@ BEGIN
         (cs.calc_qty * cs.master_price) as stock_value,
         cs.master_price as price,
         cs.calc_avg_cons as avg_daily_consumption,
-        7 as lead_time,
-        CASE WHEN (cs.calc_qty * cs.master_price) > 100000 THEN 2.0 ELSE 1.5 END as safety_factor,
-        (COALESCE(cs.calc_avg_cons, 0) * 7 * CASE WHEN (cs.calc_qty * cs.master_price) > 100000 THEN 2.0 ELSE 1.5 END) + 5 as moq,
-        ((COALESCE(cs.calc_avg_cons, 0) * 7 * CASE WHEN (cs.calc_qty * cs.master_price) > 100000 THEN 2.0 ELSE 1.5 END) + 5) + 5 as max_level,
+        cs.lead_time as lead_time,
+        -- Safety Stock = (Maximum Daily Usage - Average Daily Usage) * Lead Time 
+        -- with Max Daily Usage = 1.4 * Average Daily Usage (ADU), so (1.4 - 1.0) * ADU * LT = 0.4 * ADU * LT
+        (0.4 * COALESCE(cs.calc_avg_cons, 0) * cs.lead_time) as safety_factor,
+        -- Reorder Level = (Average Daily Usage * Lead Time) + Safety Stock
+        ((COALESCE(cs.calc_avg_cons, 0) * cs.lead_time) + (0.4 * COALESCE(cs.calc_avg_cons, 0) * cs.lead_time)) as moq,
+        -- Maximum Level = Average Daily Usage * 20 (target days)
+        (COALESCE(cs.calc_avg_cons, 0) * 20) as max_level,
         NOW() as last_updated
     FROM calculation_stage cs
 

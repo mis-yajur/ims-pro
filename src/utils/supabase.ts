@@ -262,7 +262,7 @@ export async function recalculateAndPatchLatestStock(sku: string): Promise<any> 
     }
 
     // Check if the record already exists in latest_stock
-    const resLsExist = await fetch(`${url}/rest/v1/latest_stock?sku=eq.${encodeURIComponent(sku)}&select=id,price,item_name,unit,department&limit=1`, {
+    const resLsExist = await fetch(`${url}/rest/v1/latest_stock?sku=eq.${encodeURIComponent(sku)}&select=id,price,item_name,unit,department,lead_time&limit=1`, {
       headers: { apikey: key, Authorization: `Bearer ${key}` }
     });
     const lsExistData = await resLsExist.json();
@@ -274,9 +274,15 @@ export async function recalculateAndPatchLatestStock(sku: string): Promise<any> 
     }
 
     const stockValue = quantity * masterPrice;
-    const safetyFactor = stockValue > 100000 ? 2.0 : 1.5;
-    const moq = (adc * 7 * safetyFactor) + 5;
-    const maxLevel = moq + 5;
+    const leadTime = existingRow ? (Number(existingRow.lead_time) || 5) : 5;
+    // 1st: Safety Stock = (Maximum Daily Usage - Average Daily Usage) * Lead Time
+    // with Maximum Daily Usage = 1.4 * Average Daily Usage (ADU = adc, MDU = 1.4 * adc)
+    const safetyStockValue = (1.4 - 1.0) * adc * leadTime;
+    const safetyFactor = Number(safetyStockValue.toFixed(4));
+    // 2nd: Reorder Level = (Average Daily Usage * Lead Time) + Safety Stock
+    const moq = (adc * leadTime) + safetyFactor;
+    // 3rd: Maximum Level = Average Daily Usage * 20 (target overstock days)
+    const maxLevel = adc * 20;
 
     const fallbackItemName = existingRow?.item_name || closingRow?.item_name || (transactions.length > 0 ? transactions[0].item_name : "") || "Unknown Item";
     const fallbackUnit = existingRow?.unit || closingRow?.unit || "Piece";
