@@ -387,8 +387,17 @@ export default function LatestStockTab() {
                     "Normal": "bg-emerald-100 text-emerald-800 border-emerald-200 font-bold",
                   };
 
+                  let rowBgClass = "hover:bg-slate-50/60";
+                  if (status === "Production Stop") {
+                    rowBgClass = "bg-rose-50/40 hover:bg-rose-100/30 text-slate-900";
+                  } else if (status === "Critical") {
+                    rowBgClass = "bg-orange-50/30 hover:bg-orange-100/25 text-slate-900";
+                  } else if (status === "Purchase Required") {
+                    rowBgClass = "bg-amber-50/20 hover:bg-amber-100/20 text-slate-900";
+                  }
+
                   return (
-                    <tr key={item.sku} className="hover:bg-slate-50/60 transition-colors font-medium">
+                    <tr key={item.sku} className={`transition-colors font-medium ${rowBgClass}`}>
                       <td className="px-6 py-3.5 font-bold text-slate-900 whitespace-nowrap">{item.sku}</td>
                       <td className="px-6 py-3 text-slate-900 font-bold max-w-xs">{item.item_name}</td>
                       <td className="px-6 py-3.5 text-slate-500 whitespace-nowrap">{item.unit}</td>
