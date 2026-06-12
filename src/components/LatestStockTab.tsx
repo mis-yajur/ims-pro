@@ -1,8 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { fetchAllRows, sbGet, sbRpc, formatCurrency, formatNumber, recalculateAndPatchLatestStock } from "../utils/supabase";
-import { LatestStockItem } from "../types";
+import { LatestStockItem, Transaction } from "../types";
 import { DEPARTMENTS_LIST } from "../constants";
 import { FileOutput, RefreshCw, Search, ShieldCheck, Tag, XCircle, ChevronLeft, ChevronRight } from "lucide-react";
+
+interface ProcessedStockItem extends LatestStockItem {
+  calculatedStatus: string;
+}
 
 export default function LatestStockTab() {
   const [filters, setFilters] = useState({
@@ -16,7 +20,7 @@ export default function LatestStockTab() {
     maxVal: "",
   });
 
-  const [stockItems, setStockItems] = useState<LatestStockItem[]>([]);
+  const [stockItems, setStockItems] = useState<ProcessedStockItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [page, setPage] = useState(1);
@@ -67,7 +71,24 @@ export default function LatestStockTab() {
         }
       }
 
-      let q = "?select=*&order=quantity.desc";
+      // Fetch manual Transactions
+      const io: Transaction[] = await fetchAllRows("in_out_manual", "*");
+
+      // Filter to find all active SKUs in the last 6 months list
+      const activeSkusInLast6Months = new Set<string>();
+      const sixMonthsAgo = new Date();
+      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+      io.forEach((tx) => {
+        if (tx.sku && tx.date) {
+          const txDate = new Date(tx.date);
+          if (txDate >= sixMonthsAgo) {
+            activeSkusInLast6Months.add(tx.sku);
+          }
+        }
+      });
+
+      let q = "?select=*";
       if (filters.sku) q += `&sku=ilike.*${filters.sku}*`;
       if (filters.itemName) q += `&item_name=ilike.*${filters.itemName}*`;
       if (filters.department !== "All") q += `&department=eq.${encodeURIComponent(filters.department)}`;
@@ -79,11 +100,75 @@ export default function LatestStockTab() {
       // Fetch all dynamic matching rows first to apply status filtering since status is generated on the client
       const allMatching: LatestStockItem[] = await fetchAllRows("latest_stock", "*", q);
 
-      let filtered = allMatching;
+      // Filter so we only show items that are active in the last 6 months (this item in or out)
+      const activeMatching = allMatching.filter((item) => activeSkusInLast6Months.has(item.sku));
+
+      // Calculate client-side average consumption, safety factor and status
+      const processed: ProcessedStockItem[] = activeMatching.map((item) => {
+        const txsForSku = io.filter(tx => tx.sku === item.sku);
+
+        // Find average daily consumption based on manual "Out" transactions
+        let totalConsumed = 0;
+        let minDateStr = "";
+        let maxDateStr = "";
+        txsForSku.forEach(tx => {
+          if (tx.in_out === "Out") {
+            totalConsumed += Number(tx.quantity) || 0;
+            const dStr = tx.date || tx.timestamp;
+            if (dStr) {
+              if (!minDateStr || dStr < minDateStr) minDateStr = dStr;
+              if (!maxDateStr || dStr > maxDateStr) maxDateStr = dStr;
+            }
+          }
+        });
+
+        let daysCount = 1;
+        if (minDateStr && maxDateStr) {
+          const minD = new Date(minDateStr);
+          const maxD = new Date(maxDateStr);
+          const diffTime = Math.abs(maxD.getTime() - minD.getTime());
+          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+          daysCount = Math.max(diffDays + 1, 1);
+        }
+
+        const calculatedAvgConsumption = totalConsumed > 0 ? (totalConsumed / daysCount) : (Number(item.avg_daily_consumption) || 0);
+
+        // Calculate safety stock and reorder point on the fly
+        const leadTime = Number(item.lead_time) || 5;
+        const safetyStock = calculatedAvgConsumption * 0.4 * leadTime; // peaks to average usage diff
+        const reorderLevel = (calculatedAvgConsumption * leadTime) + safetyStock;
+
+        // Overstock limit - can be derived from item.max_level, or we can use reorderLevel * 2 or calculatedAvgConsumption * 20 days
+        const maxLevel = Number(item.max_level) || (reorderLevel > 0 ? reorderLevel * 2 : 100);
+
+        const currentStock = Number(item.quantity) || 0;
+        const isOverstocked = maxLevel > 0 && currentStock > maxLevel;
+
+        let calculatedStatus = "Normal";
+        if (currentStock <= 0) {
+          calculatedStatus = "Production Stop";
+        } else if (currentStock < safetyStock) {
+          calculatedStatus = "Critical";
+        } else if (currentStock <= reorderLevel) {
+          calculatedStatus = "Purchase Required";
+        } else if (isOverstocked) {
+          calculatedStatus = "Overstock";
+        }
+
+        return {
+          ...item,
+          avg_daily_consumption: calculatedAvgConsumption,
+          safety_factor: safetyStock,
+          moq: reorderLevel, // reorder point column, MOQ/Reorder point
+          max_level: maxLevel,
+          calculatedStatus
+        };
+      });
+
+      let filtered = processed;
       if (filters.status !== "All") {
-        filtered = allMatching.filter((item) => {
-          const status = getStockStatus(Number(item.quantity || 0), Number(item.safety_factor || 0), Number(item.moq || 0));
-          return status === filters.status;
+        filtered = processed.filter((item) => {
+          return item.calculatedStatus === filters.status;
         });
       }
 
@@ -122,19 +207,9 @@ export default function LatestStockTab() {
       maxVal: "",
     });
     setPage(1);
-    // Directly call the load with zeroed filter values
+    // Directly call the load with zeroed filter values after status clears
     setTimeout(() => {
-      setLoading(true);
-      fetchAllRows("latest_stock", "*", "?select=*&order=quantity.desc").then((data) => {
-        const sortedData = [...data].sort((a, b) => {
-          const qtyA = Number(a.quantity || 0);
-          const qtyB = Number(b.quantity || 0);
-          return qtyB - qtyA;
-        });
-        setTotalCount(sortedData.length);
-        setStockItems(sortedData.slice(0, 20));
-        setLoading(false);
-      });
+      loadClosingStockData(1);
     }, 10);
   }
 
@@ -146,9 +221,14 @@ export default function LatestStockTab() {
 
       data.forEach((r) => {
         const qty = Number(r.quantity) || 0;
-        const status = getStockStatus(qty, Number(r.safety_factor || 0), Number(r.moq || 0));
+        const lead = Number(r.lead_time) || 5;
+        const avg = Number(r.avg_daily_consumption) || 0;
+        const safety = avg * 0.4 * lead;
+        const reorder = (avg * lead) + safety;
+        const maxLevel = Number(r.max_level) || (reorder > 0 ? reorder * 2 : 100);
+        const status = getStockStatus(qty, safety, reorder, maxLevel);
 
-        csv += `"${r.sku}","${r.item_name}","${r.unit || ""}","${r.department || ""}",${r.quantity},${r.stock_value},${r.price},${r.avg_daily_consumption},${r.lead_time},${r.safety_factor},${r.moq},${r.max_level},"${status.toUpperCase()}"\n`;
+        csv += `"${r.sku}","${r.item_name}","${r.unit || ""}","${r.department || ""}",${r.quantity},${r.stock_value},${r.price},${avg},${lead},${safety},${reorder},${maxLevel},"${status.toUpperCase()}"\n`;
       });
 
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -177,10 +257,11 @@ export default function LatestStockTab() {
     }
   }
 
-  function getStockStatus(qty: number, safetyStock: number, reorderLevel: number): string {
+  function getStockStatus(qty: number, safetyStock: number, reorderLevel: number, maxLevel?: number): string {
     if (qty <= 0) return "Production Stop";
     if (qty < safetyStock) return "Critical";
     if (qty <= reorderLevel) return "Purchase Required";
+    if (maxLevel && qty > maxLevel) return "Overstock";
     return "Normal";
   }
 
@@ -279,6 +360,7 @@ export default function LatestStockTab() {
               <option value="Critical">Critical (Below Safety Stock)</option>
               <option value="Purchase Required">Purchase Required (At Reorder Level)</option>
               <option value="Normal">Normal (Above Reorder Level)</option>
+              <option value="Overstock">Overstock (Above Max Level)</option>
             </select>
           </div>
         </div>
@@ -379,11 +461,12 @@ export default function LatestStockTab() {
                 </tr>
               ) : stockItems.length > 0 ? (
                 stockItems.map((item) => {
-                  const status = getStockStatus(Number(item.quantity || 0), Number(item.safety_factor || 0), Number(item.moq || 0));
+                  const status = item.calculatedStatus || "Normal";
                   const badges: { [key: string]: string } = {
                     "Production Stop": "bg-rose-100 text-rose-800 border-rose-200 font-extrabold",
                     "Critical": "bg-orange-100 text-orange-800 border-orange-200 font-extrabold animate-pulse",
                     "Purchase Required": "bg-amber-100 text-amber-800 border-amber-200 font-extrabold",
+                    "Overstock": "bg-indigo-100 text-indigo-800 border-indigo-200 font-extrabold",
                     "Normal": "bg-emerald-100 text-emerald-800 border-emerald-200 font-bold",
                   };
 
@@ -394,6 +477,8 @@ export default function LatestStockTab() {
                     rowBgClass = "bg-orange-50/30 hover:bg-orange-100/25 text-slate-900";
                   } else if (status === "Purchase Required") {
                     rowBgClass = "bg-amber-50/20 hover:bg-amber-100/20 text-slate-900";
+                  } else if (status === "Overstock") {
+                    rowBgClass = "bg-indigo-50/20 hover:bg-indigo-100/20 text-slate-900";
                   }
 
                   return (
