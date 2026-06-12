@@ -79,7 +79,7 @@ export default function App() {
                 {[
                   { id: "dashboard", label: "Dashboard" },
                   { id: "in-out", label: "Transactions" },
-                  { id: "latest-stock", label: "Reserve Snapshot" },
+                  { id: "latest-stock", label: "Latest Stock" },
                   { id: "safety-factor", label: "Safety Factors" },
                   { id: "reports", label: "Diagnostic Reports" },
                   { id: "new-item", label: "Register New SKU" },

@@ -194,7 +194,7 @@ export default function LatestStockTab() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight flex items-center gap-3">
-            Reserve Snapshot
+            Latest Stock
           </h1>
           <p className="text-slate-500 mt-2">Comprehensive directory of warehouse stock states, pricing averages, and dynamic replenishment boundaries.</p>
         </div>
@@ -221,7 +221,7 @@ export default function LatestStockTab() {
       <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
         <h3 className="text-xs font-bold uppercase text-slate-400 tracking-wider mb-4 flex items-center gap-2">
           <Search className="w-4 h-4" />
-          Filter Reserve Snapshot
+          Filter Latest Stock
         </h3>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
