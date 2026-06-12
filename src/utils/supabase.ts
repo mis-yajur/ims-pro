@@ -261,13 +261,16 @@ export async function recalculateAndPatchLatestStock(sku: string): Promise<any> 
       }
     }
 
+    // Check if the record already exists in latest_stock
+    const resLsExist = await fetch(`${url}/rest/v1/latest_stock?sku=eq.${encodeURIComponent(sku)}&select=id,price,item_name,unit,department&limit=1`, {
+      headers: { apikey: key, Authorization: `Bearer ${key}` }
+    });
+    const lsExistData = await resLsExist.json();
+    const exists = lsExistData && lsExistData.length > 0;
+    const existingRow = exists ? lsExistData[0] : null;
+
     if (masterPrice === 0) {
-      // Retrieve fallback price from previous latest_stock record
-      const resLs = await fetch(`${url}/rest/v1/latest_stock?sku=eq.${encodeURIComponent(sku)}&select=price&limit=1`, {
-        headers: { apikey: key, Authorization: `Bearer ${key}` }
-      });
-      const lsData = await resLs.json();
-      masterPrice = lsData && lsData.length > 0 ? (Number(lsData[0].price) || 0) : 0;
+      masterPrice = existingRow ? (Number(existingRow.price) || 0) : 0;
     }
 
     const stockValue = quantity * masterPrice;
@@ -275,33 +278,59 @@ export async function recalculateAndPatchLatestStock(sku: string): Promise<any> 
     const moq = (adc * 7 * safetyFactor) + 5;
     const maxLevel = moq + 5;
 
-    // 6. Direct PATCH update back to the master latest_stock table
-    const resPatch = await fetch(`${url}/rest/v1/latest_stock?sku=eq.${encodeURIComponent(sku)}`, {
-      method: "PATCH",
-      headers: {
-        apikey: key,
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-        "Prefer": "return=representation"
-      },
-      body: JSON.stringify({
-        quantity: Number(quantity.toFixed(4)),
-        stock_value: Number(stockValue.toFixed(2)),
-        price: Number(masterPrice.toFixed(4)),
-        avg_daily_consumption: Number(adc.toFixed(6)),
-        safety_factor: safetyFactor,
-        moq: Number(moq.toFixed(2)),
-        max_level: Number(maxLevel.toFixed(2)),
-        last_updated: new Date().toISOString()
-      })
-    });
+    const fallbackItemName = existingRow?.item_name || closingRow?.item_name || (transactions.length > 0 ? transactions[0].item_name : "") || "Unknown Item";
+    const fallbackUnit = existingRow?.unit || closingRow?.unit || "Piece";
+    const fallbackDept = existingRow?.department || closingRow?.department || (transactions.length > 0 ? transactions[0].department : "General") || "General";
 
-    if (resPatch.ok) {
-      console.log(`[Recalculator] Successfully recalculated and synced SKU: ${sku}`);
-      return await resPatch.json();
+    const payload = {
+      sku: sku,
+      item_name: fallbackItemName,
+      unit: fallbackUnit,
+      department: fallbackDept,
+      quantity: Number(quantity.toFixed(4)),
+      stock_value: Number(stockValue.toFixed(2)),
+      price: Number(masterPrice.toFixed(4)),
+      avg_daily_consumption: Number(adc.toFixed(6)),
+      safety_factor: safetyFactor,
+      moq: Number(moq.toFixed(2)),
+      max_level: Number(maxLevel.toFixed(2)),
+      last_updated: new Date().toISOString()
+    };
+
+    let saveRes;
+    if (exists) {
+      // 6. Direct PATCH update back to the master latest_stock table
+      saveRes = await fetch(`${url}/rest/v1/latest_stock?sku=eq.${encodeURIComponent(sku)}`, {
+        method: "PATCH",
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+          "Prefer": "return=representation"
+        },
+        body: JSON.stringify(payload)
+      });
     } else {
-      const errorText = await resPatch.text();
-      console.warn(`[Recalculator] Failed to patch latest_stock:`, errorText);
+      // 6. Direct POST insert to initialize record in the master latest_stock table
+      saveRes = await fetch(`${url}/rest/v1/latest_stock`, {
+        method: "POST",
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+          "Prefer": "return=representation"
+        },
+        body: JSON.stringify(payload)
+      });
+    }
+
+    if (saveRes.ok) {
+      console.log(`[Recalculator] Successfully recalculated and synced SKU: ${sku}`);
+      const savedData = await saveRes.json();
+      return savedData && savedData.length > 0 ? savedData[0] : null;
+    } else {
+      const errorText = await saveRes.text();
+      console.warn(`[Recalculator] Failed to save latest_stock:`, errorText);
     }
   } catch (err) {
     console.error(`[Recalculator] Exception during SKU recalculation:`, err);

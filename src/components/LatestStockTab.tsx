@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { fetchAllRows, sbGet, formatCurrency, formatNumber, recalculateAndPatchLatestStock } from "../utils/supabase";
+import { fetchAllRows, sbGet, sbRpc, formatCurrency, formatNumber, recalculateAndPatchLatestStock } from "../utils/supabase";
 import { LatestStockItem } from "../types";
 import { DEPARTMENTS_LIST } from "../constants";
 import { FileOutput, RefreshCw, Search, ShieldCheck, Tag, XCircle, ChevronLeft, ChevronRight } from "lucide-react";
@@ -18,6 +18,7 @@ export default function LatestStockTab() {
 
   const [stockItems, setStockItems] = useState<LatestStockItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
 
@@ -25,7 +26,18 @@ export default function LatestStockTab() {
   const [itemNamesList, setItemNamesList] = useState<string[]>([]);
 
   useEffect(() => {
-    loadClosingStockData(1);
+    // Run all calculations automatically to synchronize the database with master values
+    const runInitialSync = async () => {
+      try {
+        await sbRpc("run_all_calculations");
+      } catch (err) {
+        console.warn("Silent background calculations failed, loading static list instead:", err);
+      } finally {
+        loadClosingStockData(1);
+      }
+    };
+
+    runInitialSync();
     loadItemNames();
   }, []);
 
@@ -154,6 +166,18 @@ export default function LatestStockTab() {
     }
   }
 
+  async function handleRefreshAndSync() {
+    setSyncing(true);
+    try {
+      await sbRpc("run_all_calculations");
+    } catch (err) {
+      console.warn("Silent background calculations failed:", err);
+    } finally {
+      setSyncing(false);
+      loadClosingStockData(1);
+    }
+  }
+
   function getStockStatus(qty: number, maxLevel: number): string {
     if (qty <= 0) return "out-of-stock";
     if (qty <= maxLevel * 0.1) return "critical";
@@ -176,11 +200,12 @@ export default function LatestStockTab() {
         </div>
         <div className="flex items-center gap-3 text-sm">
           <button
-            onClick={() => loadClosingStockData(1)}
-            className="px-4 py-2.5 bg-white border border-slate-200 text-slate-700 font-semibold rounded-xl hover:bg-slate-50 transition-colors flex items-center gap-2 shadow-sm"
+            onClick={handleRefreshAndSync}
+            disabled={syncing || loading}
+            className="px-4 py-2.5 bg-white border border-slate-200 text-slate-700 font-semibold rounded-xl hover:bg-slate-50 transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50"
           >
-            <RefreshCw className="w-4 h-4 text-slate-400" />
-            Refresh List
+            <RefreshCw className={`w-4 h-4 text-slate-400 ${syncing ? "animate-spin text-indigo-600" : ""}`} />
+            {syncing ? "Syncing..." : "Refresh List"}
           </button>
           <button
             onClick={handleExportCSV}

@@ -204,13 +204,23 @@ export default function InOutTab({ showAddModalTrigger, onResetModalTrigger, onS
   }
 
   async function handleSKUChange(sku: string) {
-    setModalForm((prev) => ({ ...prev, sku }));
-    if (!sku) return;
+    const cleanSku = sku.toUpperCase().replace(/\s+/g, "");
+    setModalForm((prev) => ({ ...prev, sku: cleanSku }));
+    if (!cleanSku) return;
 
     try {
-      const { data } = await sbGet("latest_stock", `?sku=eq.${encodeURIComponent(sku)}&select=*&limit=1`);
-      if (data && data.length > 0) {
-        const item: LatestStockItem = data[0];
+      // 1. Silently recalculate and sync current SKU in database to get the absolute live quantity state
+      const syncedItem = await recalculateAndPatchLatestStock(cleanSku);
+      
+      let item = syncedItem;
+      if (!item) {
+        const { data } = await sbGet("latest_stock", `?sku=eq.${encodeURIComponent(cleanSku)}&select=*&limit=1`);
+        if (data && data.length > 0) {
+          item = data[0];
+        }
+      }
+
+      if (item) {
         const qVal = modalForm.quantity;
         const qty = parseFloat(qVal) || 0;
         const price = Number(item.price) || 0;
@@ -227,6 +237,16 @@ export default function InOutTab({ showAddModalTrigger, onResetModalTrigger, onS
             stock_value: calculatedValue > 0 ? calculatedValue.toFixed(2) : "",
           };
           verifyStock(updated.in_out, qty, Number(item.quantity || 0));
+          return updated;
+        });
+      } else {
+        // If this SKU was never registered anywhere, initialize it to 0 current stock
+        setModalForm((prev) => {
+          const updated = {
+            ...prev,
+            current_stock: "0"
+          };
+          verifyStock(updated.in_out, parseFloat(updated.quantity) || 0, 0);
           return updated;
         });
       }
