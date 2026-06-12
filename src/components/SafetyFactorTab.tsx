@@ -2,33 +2,60 @@ import React, { useState, useEffect } from "react";
 import { fetchAllRows, sbGet, formatCurrency, formatNumber } from "../utils/supabase";
 import { LatestStockItem } from "../types";
 import { DEPARTMENTS_LIST } from "../constants";
-import { AlertCircle, AlertOctagon, CheckCircle2, FileOutput, RefreshCw, ShieldAlert, XCircle, ChevronLeft, ChevronRight } from "lucide-react";
+import { 
+  AlertCircle, 
+  AlertOctagon, 
+  CheckCircle2, 
+  FileOutput, 
+  RefreshCw, 
+  ShieldAlert, 
+  XCircle, 
+  ChevronLeft, 
+  ChevronRight, 
+  Sliders, 
+  Info,
+  TrendingDown,
+  TrendingUp,
+  Coins,
+  Warehouse,
+  Flame,
+  Zap,
+  Search
+} from "lucide-react";
 
 export default function SafetyFactorTab() {
+  // Global control parameters
+  const [targetOverstockDays, setTargetOverstockDays] = useState(20);
+  const [peakMultiplier, setPeakMultiplier] = useState(1.4); // Max daily use factor, e.g. 1.4x of average daily use
+
+  // Filter keys
   const [filters, setFilters] = useState({
     sku: "",
     itemName: "",
     department: "All",
-    minSF: "",
-    maxSF: "",
+    statusFilter: "All"
   });
 
-  const [items, setItems] = useState<LatestStockItem[]>([]);
+  // DB items
+  const [allItems, setAllItems] = useState<LatestStockItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
 
-  // Stats Card Counts
-  const [cardCounts, setCardCounts] = useState({ critical: 0, low: 0, normal: 0, high: 0 });
-
-  // Range min/max values for heatmap computation
-  const [heatmapBounds, setHeatmapBounds] = useState({ min: 0, max: 10 });
-
-  // Autocomplete names list
+  // Auto-complete names
   const [itemNamesList, setItemNamesList] = useState<string[]>([]);
 
+  // Simulation state for the Sandbox Calculator
+  const [sandboxInputs, setSandboxInputs] = useState({
+    avgUsage: 100,
+    maxUsage: 140,
+    leadTime: 5,
+    currentStock: 5000,
+    targetDays: 20
+  });
+
   useEffect(() => {
-    loadSafetyFactorData(1);
+    loadSafetyFactorData();
     loadItemNames();
   }, []);
 
@@ -42,47 +69,12 @@ export default function SafetyFactorTab() {
     }
   }
 
-  async function loadSafetyFactorData(p = 1) {
+  async function loadSafetyFactorData() {
     setLoading(true);
-    setPage(p);
     try {
-      let q = "?select=*&order=safety_factor.asc";
-      if (filters.sku) q += `&sku=ilike.*${filters.sku}*`;
-      if (filters.itemName) q += `&item_name=ilike.*${filters.itemName}*`;
-      if (filters.department !== "All") q += `&department=eq.${encodeURIComponent(filters.department)}`;
-      if (filters.minSF) q += `&safety_factor=gte.${filters.minSF}`;
-      if (filters.maxSF) q += `&safety_factor=lte.${filters.maxSF}`;
-
-      // Fetch all items to compile counts & heat range
-      const data: LatestStockItem[] = await fetchAllRows("latest_stock", "*", q);
-
-      // Compute statistics counts
-      const counts = { critical: 0, low: 0, normal: 0, high: 0 };
-      const sVals: number[] = [];
-
-      data.forEach((r) => {
-        const sf = Number(r.safety_factor) || 0;
-        sVals.push(sf);
-        if (sf < 1) counts.critical++;
-        else if (sf < 2) counts.low++;
-        else if (sf < 5) counts.normal++;
-        else counts.high++;
-      });
-
-      setCardCounts(counts);
-
-      // Compute bounds for heatmap coloring
-      if (sVals.length > 0) {
-        setHeatmapBounds({
-          min: Math.min(...sVals),
-          max: Math.max(...sVals),
-        });
-      }
-
-      setTotalCount(data.length);
-
-      const offset = (p - 1) * 20;
-      setItems(data.slice(offset, offset + 20));
+      // Fetch all items from DB to evaluate in-memory for live configuration updates
+      const data: LatestStockItem[] = await fetchAllRows("latest_stock", "*", "?select=*&order=sku.asc");
+      setAllItems(data);
     } catch (e) {
       console.error("Safety Factor processing failure:", e);
     } finally {
@@ -90,8 +82,109 @@ export default function SafetyFactorTab() {
     }
   }
 
+  // Handle local simulation input changes
+  const handleSandboxChange = (key: string, val: number) => {
+    setSandboxInputs(prev => ({
+      ...prev,
+      [key]: Math.max(0, val)
+    }));
+  };
+
+  // Run calculations on the custom Sandbox Values
+  const sandSS = (sandboxInputs.maxUsage - sandboxInputs.avgUsage) * sandboxInputs.leadTime;
+  const sandRL = (sandboxInputs.avgUsage * sandboxInputs.leadTime) + sandSS;
+  const sandInvDays = sandboxInputs.avgUsage > 0 ? (sandboxInputs.currentStock / sandboxInputs.avgUsage) : 0;
+  
+  let sandStatus = "Normal";
+  let sandStatusColor = "bg-emerald-50 text-emerald-800 border-emerald-200";
+  if (sandboxInputs.currentStock <= 0) {
+    sandStatus = "Production Stop";
+    sandStatusColor = "bg-rose-100 text-rose-800 border-rose-300 animate-pulse";
+  } else if (sandboxInputs.currentStock < sandSS) {
+    sandStatus = "Critical";
+    sandStatusColor = "bg-orange-100 text-orange-800 border-orange-300";
+  } else if (sandboxInputs.currentStock <= sandRL) {
+    sandStatus = "Purchase Required";
+    sandStatusColor = "bg-amber-100 text-amber-800 border-amber-300";
+  }
+  const sandOverstock = sandInvDays > sandboxInputs.targetDays;
+
+  // Real-time calculations applied dynamically on complete fetched lists
+  const calculatedRows = allItems.map(item => {
+    const adu = Number(item.avg_daily_consumption) || 0;
+    const mdu = adu * peakMultiplier;
+    const lt = item.lead_time || 5;
+
+    // Formulas:
+    // 1st: Safety Stock = (Max Daily Usage - Average Daily Usage) * Lead Time
+    const safetyStock = (mdu - adu) * lt;
+
+    // 2nd: Reorder Level = (Average Daily Usage * Lead Time) + Safety Stock
+    const reorderLevel = (adu * lt) + safetyStock;
+
+    // 4th: Reduce Overstock Days = Current Stock / Average Daily Usage
+    const currentStock = Number(item.quantity) || 0;
+    const inventoryDays = adu > 0 ? (currentStock / adu) : 0;
+    const overstocked = inventoryDays > targetOverstockDays;
+
+    // 3rd: Low Stock Indication
+    let status: "Normal" | "Purchase Required" | "Critical" | "Production Stop" = "Normal";
+    if (currentStock <= 0) {
+      status = "Production Stop";
+    } else if (currentStock < safetyStock) {
+      status = "Critical";
+    } else if (currentStock <= reorderLevel) {
+      status = "Purchase Required";
+    }
+
+    return {
+      ...item,
+      adu,
+      mdu,
+      lt,
+      safetyStock,
+      reorderLevel,
+      inventoryDays,
+      overstocked,
+      status
+    };
+  });
+
+  // Apply search filtering on calculated rows
+  const filteredCalculatedRows = calculatedRows.filter(row => {
+    const matchSku = !filters.sku || row.sku.toLowerCase().includes(filters.sku.toLowerCase());
+    const matchName = !filters.itemName || row.item_name.toLowerCase().includes(filters.itemName.toLowerCase());
+    const matchDept = filters.department === "All" || row.department === filters.department;
+    
+    let matchStatus = true;
+    if (filters.statusFilter !== "All") {
+      if (filters.statusFilter === "Overstocked") {
+        matchStatus = row.overstocked;
+      } else {
+        matchStatus = row.status === filters.statusFilter;
+      }
+    }
+
+    return matchSku && matchName && matchDept && matchStatus;
+  });
+
+  // Re-calculate statistics for header KPIs based on current filtered set
+  const statsCounts = {
+    productionStop: calculatedRows.filter(r => r.status === "Production Stop").length,
+    critical: calculatedRows.filter(r => r.status === "Critical").length,
+    purchaseRequired: calculatedRows.filter(r => r.status === "Purchase Required").length,
+    normal: calculatedRows.filter(r => r.status === "Normal").length,
+    overstocked: calculatedRows.filter(r => r.overstocked).length
+  };
+
+  // Pagination parameters
+  const offset = (page - 1) * 20;
+  const paginatedRows = filteredCalculatedRows.slice(offset, offset + 20);
+  const totalPages = Math.ceil(filteredCalculatedRows.length / 20);
+
   function handleFilterChange(field: string, val: string) {
     setFilters((prev) => ({ ...prev, [field]: val }));
+    setPage(1);
   }
 
   function handleResetFilters() {
@@ -99,94 +192,58 @@ export default function SafetyFactorTab() {
       sku: "",
       itemName: "",
       department: "All",
-      minSF: "",
-      maxSF: "",
+      statusFilter: "All"
     });
     setPage(1);
-    setTimeout(() => {
-      loadSafetyFactorData(1);
-    }, 10);
   }
 
   async function handleExportCSV() {
-    setLoading(true);
     try {
-      const data = await fetchAllRows("latest_stock");
-      let csv = "SKU,Item Name,Department,Quantity,Stock Value,Avg Daily Consumption,Lead Time (Days),Safety Factor,Level State\n";
+      let csv = "SKU,Item Name,Department,Current Stock,Avg Daily Usage,Max Daily Usage,Lead Time,Safety Stock,Reorder Level,Inventory Days,Factory Status,Overstock Status\n";
 
-      data.forEach((r) => {
-        const sf = Number(r.safety_factor) || 0;
-        const state = getSFStatus(sf);
-        csv += `"${r.sku}","${r.item_name}","${r.department || ""}",${r.quantity},${r.stock_value},${r.avg_daily_consumption},${r.lead_time},${sf.toFixed(2)},"${state.toUpperCase()}"\n`;
+      calculatedRows.forEach((r) => {
+        csv += `"${r.sku}","${r.item_name}","${r.department || ""}",${r.quantity},${r.adu.toFixed(4)},${r.mdu.toFixed(4)},${r.lt},${r.safetyStock.toFixed(2)},${r.reorderLevel.toFixed(2)},${r.inventoryDays.toFixed(1)},"${r.status}","${r.overstocked ? "OVERSTOCK" : "OK"}"\n`;
       });
 
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
       const link = document.createElement("a");
       link.setAttribute("href", URL.createObjectURL(blob));
-      link.setAttribute("download", `Safety_Factors_Ledger_${new Date().toISOString().split("T")[0]}.csv`);
+      link.setAttribute("download", `Factory_Stock_Control_Report_${new Date().toISOString().split("T")[0]}.csv`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
     } catch (e) {
-      console.error("Safety factor CSV export failures:", e);
-    } finally {
-      setLoading(false);
+      console.error("CSV export failure:", e);
     }
   }
-
-  function getSFStatus(sf: number): string {
-    if (sf < 1) return "Critical";
-    if (sf < 2) return "Low";
-    if (sf < 5) return "Normal";
-    return "High";
-  }
-
-  // Dynamic heat shading: Red -> Yellow -> Green -> Indigo
-  function getHeatMapShading(val: number): string {
-    const { min, max } = heatmapBounds;
-    if (min === max) return "transparent";
-
-    // Normalize value
-    const r = (val - min) / (max - min || 1);
-
-    if (val < 1.0) {
-      // Urgent hazard: rose shading
-      return `rgba(244, 63, 94, ${0.1 + (1 - r) * 0.15})`;
-    } else if (val < 2.0) {
-      // Moderate warning: amber shading
-      return `rgba(245, 158, 11, 0.12)`;
-    } else if (val < 5.5) {
-      // Comfortable safety: emerald hue
-      return `rgba(16, 185, 129, 0.12)`;
-    } else {
-      // Immersive level: indigo high buffer
-      return `rgba(99, 102, 241, 0.14)`;
-    }
-  }
-
-  const totalPages = Math.ceil(totalCount / 20);
 
   return (
-    <div className="space-y-6 animate-fadeIn pb-12">
+    <div id="safety-factor-console-container" className="space-y-6 animate-fadeIn pb-12">
       {/* View Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div id="header-section" className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight flex items-center gap-3">
             Safety Factor Console
           </h1>
-          <p className="text-slate-500 mt-2">Analytical model reporting stock safety ratios, lead times, and warning thresholds.</p>
+          <p className="text-slate-500 mt-2">
+            Automated production safety buffers, reorder thresholds, and dynamic overstock protection engine.
+          </p>
         </div>
         <div className="flex items-center gap-3 text-sm">
           <button
-            onClick={() => loadSafetyFactorData(1)}
-            className="px-4 py-2.5 bg-white border border-slate-200 text-slate-700 font-semibold rounded-xl hover:bg-slate-50 transition-colors flex items-center gap-2 shadow-sm"
+            id="refresh-btn"
+            onClick={loadSafetyFactorData}
+            title="Refresh Stock Data"
+            disabled={loading}
+            className="px-4 py-2.5 bg-white border border-slate-200 text-slate-700 font-semibold rounded-xl hover:bg-slate-50 transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50"
           >
-            <RefreshCw className="w-4 h-4 text-slate-400" />
+            <RefreshCw className={`w-4 h-4 text-slate-400 ${loading ? "animate-spin" : ""}`} />
             Refresh Analysis
           </button>
           <button
+            id="export-csv-btn"
             onClick={handleExportCSV}
-            className="px-5 py-2.5 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition-all flex items-center gap-2 shadow-md hover:shadow-indigo-100 animate-pulseHover"
+            className="px-5 py-2.5 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition-all flex items-center gap-2 shadow-md hover:shadow-indigo-150"
           >
             <FileOutput className="w-4 h-4" />
             Export Analysis CSV
@@ -194,63 +251,344 @@ export default function SafetyFactorTab() {
         </div>
       </div>
 
-      {/* Statistics Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex items-center gap-4 relative overflow-hidden">
-          <div className="p-3 bg-rose-50 text-rose-600 rounded-xl">
-            <AlertOctagon className="w-6 h-6" />
+      {/* KPI Overviews based on the requested Factory Status thresholds */}
+      <div id="kpi-cards-grid" className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <div className="bg-white border border-rose-200 rounded-2xl p-4 shadow-sm flex flex-col justify-between relative overflow-hidden">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Production Stop</span>
+            <div className="p-1.5 bg-rose-50 text-rose-600 rounded-lg">
+              <AlertOctagon className="w-4 h-4" />
+            </div>
           </div>
+          <div className="mt-4">
+            <h3 className="text-2xl font-black text-rose-600">{statsCounts.productionStop}</h3>
+            <p className="text-[10px] text-slate-400 font-semibold mt-0.5">Zero stock items</p>
+          </div>
+          <div className="absolute top-0 left-0 w-1 h-full bg-rose-500" />
+        </div>
+
+        <div className="bg-white border border-orange-200 rounded-2xl p-4 shadow-sm flex flex-col justify-between relative overflow-hidden">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Critical Buffer</span>
+            <div className="p-1.5 bg-orange-50 text-orange-600 rounded-lg">
+              <AlertCircle className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-4">
+            <h3 className="text-2xl font-black text-orange-600">{statsCounts.critical}</h3>
+            <p className="text-[10px] text-slate-400 font-semibold mt-0.5">Below safety stock</p>
+          </div>
+          <div className="absolute top-0 left-0 w-1 h-full bg-orange-500" />
+        </div>
+
+        <div className="bg-white border border-amber-200 rounded-2xl p-4 shadow-sm flex flex-col justify-between relative overflow-hidden">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Reorder Required</span>
+            <div className="p-1.5 bg-amber-50 text-amber-500 rounded-lg">
+              <Zap className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-4">
+            <h3 className="text-2xl font-black text-amber-600">{statsCounts.purchaseRequired}</h3>
+            <p className="text-[10px] text-slate-400 font-semibold mt-0.5">At/Below reorder level</p>
+          </div>
+          <div className="absolute top-0 left-0 w-1 h-full bg-amber-500" />
+        </div>
+
+        <div className="bg-white border border-emerald-200 rounded-2xl p-4 shadow-sm flex flex-col justify-between relative overflow-hidden">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Normal Reserves</span>
+            <div className="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg">
+              <CheckCircle2 className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-4">
+            <h3 className="text-2xl font-black text-emerald-600">{statsCounts.normal}</h3>
+            <p className="text-[10px] text-slate-400 font-semibold mt-0.5">Above reorder level</p>
+          </div>
+          <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500" />
+        </div>
+
+        <div className="bg-white border border-indigo-200 rounded-2xl p-4 shadow-sm flex flex-col justify-between relative overflow-hidden col-span-2 md:col-span-1">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Overstock Limit</span>
+            <div className="p-1.5 bg-indigo-50 text-indigo-650 rounded-lg">
+              <ShieldAlert className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-4">
+            <h3 className="text-2xl font-black text-indigo-700">{statsCounts.overstocked}</h3>
+            <p className="text-[10px] text-slate-400 font-semibold mt-0.5">Exceeds {targetOverstockDays} days target</p>
+          </div>
+          <div className="absolute top-0 left-0 w-1 h-full bg-indigo-600" />
+        </div>
+      </div>
+
+      {/* SECTION 1: Interfacing Formulas and the Interactive Educational Workbench */}
+      <div id="blueprint-workbench-root" className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        {/* Left Side: Interactive Factory Formula Sandbox */}
+        <div id="calculator-sandbox-panel" className="lg:col-span-7 bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col justify-between">
           <div>
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Urgent Buffer</p>
-            <h3 className="text-2xl font-black text-slate-950 mt-1">{cardCounts.critical}</h3>
-            <span className="text-[10px] text-rose-500 font-bold">Safety ratio &lt; 1.0</span>
+            <div className="flex items-center gap-2 mb-4">
+              <span className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+                <Sliders className="w-5 h-5" />
+              </span>
+              <div>
+                <h3 className="text-lg font-bold text-slate-800">Dynamic Formulas Sandbox</h3>
+                <p className="text-xs text-slate-400">Input generic variables to preview the factory stock control logic live.</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-6">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">
+                  Average Daily Usage
+                </label>
+                <input
+                  type="number"
+                  value={sandboxInputs.avgUsage}
+                  onChange={(e) => handleSandboxChange("avgUsage", parseFloat(e.target.value) || 0)}
+                  className="w-full text-sm font-extrabold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50/50 text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">
+                  Maximum Daily Usage
+                </label>
+                <input
+                  type="number"
+                  value={sandboxInputs.maxUsage}
+                  onChange={(e) => handleSandboxChange("maxUsage", parseFloat(e.target.value) || 0)}
+                  className="w-full text-sm font-extrabold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50/50 text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">
+                  Supplier Lead Time
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    value={sandboxInputs.leadTime}
+                    onChange={(e) => handleSandboxChange("leadTime", parseInt(e.target.value) || 0)}
+                    className="w-full text-sm font-extrabold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50/50 text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <span className="absolute right-3 top-2 text-[10px] font-bold text-slate-400">DAYS</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">
+                  Current Stock Reserves
+                </label>
+                <input
+                  type="number"
+                  value={sandboxInputs.currentStock}
+                  onChange={(e) => handleSandboxChange("currentStock", parseFloat(e.target.value) || 0)}
+                  className="w-full text-sm font-extrabold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50/50 text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">
+                  Target Max Days
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    value={sandboxInputs.targetDays}
+                    onChange={(e) => handleSandboxChange("targetDays", parseInt(e.target.value) || 0)}
+                    className="w-full text-sm font-extrabold border border-slate-200 rounded-xl px-3 py-2 bg-slate-50/50 text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <span className="absolute right-3 top-2 text-[10px] font-bold text-slate-400">DAYS</span>
+                </div>
+              </div>
+
+              <div className="flex flex-col justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSandboxInputs({
+                      avgUsage: 100,
+                      maxUsage: 140,
+                      leadTime: 5,
+                      currentStock: 500,
+                      targetDays: 20
+                    });
+                  }}
+                  className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all"
+                >
+                  Reset Calculator
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Sandbox Live Outputs */}
+          <div id="sandbox-output-zone" className="mt-6 pt-6 border-t border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-indigo-50/45 border border-indigo-100/80 rounded-xl p-3 flex flex-col justify-between">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Calculated Safety Stock</span>
+              <div>
+                <div className="text-xl font-black text-indigo-950 mt-1">{sandSS.toFixed(0)}</div>
+                <p className="text-[9px] text-slate-400 leading-tight mt-0.5">Emergency buffer level</p>
+              </div>
+            </div>
+
+            <div className="bg-indigo-50/45 border border-indigo-100/80 rounded-xl p-3 flex flex-col justify-between">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Calculated Reorder Level</span>
+              <div>
+                <div className="text-xl font-black text-indigo-950 mt-1">{sandRL.toFixed(0)}</div>
+                <p className="text-[9px] text-slate-400 leading-tight mt-0.5">Order trigger boundary</p>
+              </div>
+            </div>
+
+            <div className={`border rounded-xl p-3 flex flex-col justify-between ${sandStatusColor}`}>
+              <span className="text-[10px] font-bold opacity-75 uppercase tracking-wider">Simulated Status State</span>
+              <div>
+                <div className="text-lg font-black tracking-tight mt-1 truncate">{sandStatus}</div>
+                {sandOverstock && (
+                  <span className="inline-block mt-1 font-bold text-[9px] bg-red-100 text-red-800 px-1.5 py-0.5 rounded uppercase">
+                    Overstock Alert ({sandInvDays.toFixed(0)} days)
+                  </span>
+                )}
+                {!sandOverstock && (
+                  <p className="text-[9px] opacity-75 leading-tight mt-0.5">Holds {sandInvDays.toFixed(0)} consumption days</p>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex items-center gap-4 relative overflow-hidden">
-          <div className="p-3 bg-amber-50 text-amber-500 rounded-xl">
-            <AlertCircle className="w-6 h-6" />
-          </div>
-          <div>
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Low Safety</p>
-            <h3 className="text-2xl font-black text-slate-950 mt-1">{cardCounts.low}</h3>
-            <span className="text-[10px] text-amber-500 font-bold">1.0 ≤ ratio &lt; 2.0</span>
-          </div>
-        </div>
+        {/* Right Side: Factory System Reference Blueprint Cards */}
+        <div id="blueprint-reference" className="lg:col-span-5 space-y-4">
+          <div className="bg-slate-900 text-white rounded-2xl p-6 shadow-md flex flex-col justify-between h-full">
+            <div>
+              <div className="flex items-center gap-2 mb-4">
+                <span className="p-1.5 bg-indigo-500/10 text-indigo-400 rounded-lg">
+                  <Info className="w-4 h-4" />
+                </span>
+                <span className="text-xs font-bold tracking-widest uppercase text-slate-400">Formula System Blueprint</span>
+              </div>
 
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex items-center gap-4 relative overflow-hidden">
-          <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
-            <CheckCircle2 className="w-6 h-6" />
-          </div>
-          <div>
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Secure Stock</p>
-            <h3 className="text-2xl font-black text-slate-950 mt-1">{cardCounts.normal}</h3>
-            <span className="text-[10px] text-emerald-500 font-bold">2.0 ≤ ratio &lt; 5.0</span>
-          </div>
-        </div>
+              <div className="space-y-4 text-xs text-slate-350">
+                <div className="border-b border-slate-800 pb-3">
+                  <div className="flex items-center justify-between text-white font-bold">
+                    <span>1. Safety Stock</span>
+                    <span className="text-[10px] text-indigo-400 font-mono">Buffer</span>
+                  </div>
+                  <p className="font-mono text-[10px] text-slate-400 mt-1 bg-slate-950/40 p-1.5 rounded text-center">
+                    (Maximum Daily Usage - Average Daily Usage) × Lead Time
+                  </p>
+                  <p className="mt-1 text-[10px] leading-relaxed text-slate-400">Precludes shutdown states resulting from material delivery delays.</p>
+                </div>
 
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex items-center gap-4 relative overflow-hidden">
-          <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
-            <ShieldAlert className="w-6 h-6" />
-          </div>
-          <div>
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Excess Stock</p>
-            <h3 className="text-2xl font-black text-slate-950 mt-1">{cardCounts.high}</h3>
-            <span className="text-[10px] text-indigo-500 font-bold">Ratio ≥ 5.0 items</span>
+                <div className="border-b border-slate-800 pb-3">
+                  <div className="flex items-center justify-between text-white font-bold">
+                    <span>2. Reorder Level</span>
+                    <span className="text-[10px] text-indigo-400 font-mono">Trigger</span>
+                  </div>
+                  <p className="font-mono text-[10px] text-slate-400 mt-1 bg-slate-950/40 p-1.5 rounded text-center">
+                    (Average Daily Usage × Lead Time) + Safety Stock
+                  </p>
+                  <p className="mt-1 text-[10px] leading-relaxed text-slate-400">Indicates precise boundary representing correct moment to order.</p>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between text-white font-bold">
+                    <span>3. Avoid Overstock</span>
+                    <span className="text-[10px] text-indigo-400 font-mono">Control</span>
+                  </div>
+                  <p className="font-mono text-[10px] text-slate-400 mt-1 bg-slate-950/40 p-1.5 rounded text-center">
+                    Inventory Days = Current Stock ÷ Average Daily Usage
+                  </p>
+                  <p className="mt-1 text-[10px] leading-relaxed text-slate-400">Overstock occurs when stock holds coverage exceeding set target days limit.</p>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Advanced Filters Block */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+      {/* SECTION 2: Master Controller (Interactive Sliders) */}
+      <div id="interactive-sliders-panel" className="bg-gradient-to-r from-slate-50 to-indigo-50/20 rounded-2xl border border-slate-200 p-6 shadow-sm">
+        <h3 className="text-xs font-bold uppercase text-slate-500 tracking-wider mb-4 flex items-center gap-2">
+          <Warehouse className="w-4 h-4 text-indigo-600" />
+          Interactive Global Stock Threshold Controllers
+        </h3>
+        <p className="text-xs text-slate-500 mb-6 leading-relaxed">
+          The sliders below calculate maximum daily usage parameters and flags the inventory ledger overstock statuses across your active stock collection dynamically:
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          {/* Slider 1: Target Overstock Days */}
+          <div className="space-y-2 bg-white rounded-xl p-4 border border-slate-100">
+            <div className="flex justify-between items-center">
+              <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                <TrendingDown className="w-4 h-4 text-indigo-600" />
+                Target Coverage limit (Overstock Threshold)
+              </span>
+              <span className="text-sm font-black text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-lg">
+                {targetOverstockDays} Days
+              </span>
+            </div>
+            <input
+              type="range"
+              min="5"
+              max="120"
+              step="1"
+              value={targetOverstockDays}
+              onChange={(e) => setTargetOverstockDays(parseInt(e.target.value))}
+              className="w-full h-1.5 bg-slate-100 rounded-lg appearance-none cursor-ew-resize accent-indigo-600"
+            />
+            <div className="flex justify-between text-[10px] text-slate-400 font-medium">
+              <span>5 days (Ultra-lean)</span>
+              <span>20 days (Typical)</span>
+              <span>120 days (Bulk)</span>
+            </div>
+          </div>
+
+          {/* Slider 2: Peak Demand Factor */}
+          <div className="space-y-2 bg-white rounded-xl p-4 border border-slate-100">
+            <div className="flex justify-between items-center">
+              <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                <TrendingUp className="w-4 h-4 text-rose-500" />
+                Peak Demand Multiplier (Max Daily Usage)
+              </span>
+              <span className="text-sm font-black text-rose-600 bg-rose-50 px-2.5 py-1 rounded-lg">
+                {peakMultiplier.toFixed(2)}x ADU
+              </span>
+            </div>
+            <input
+              type="range"
+              min="1.0"
+              max="3.0"
+              step="0.05"
+              value={peakMultiplier}
+              onChange={(e) => setPeakMultiplier(parseFloat(e.target.value))}
+              className="w-full h-1.5 bg-slate-100 rounded-lg appearance-none cursor-ew-resize accent-rose-500"
+            />
+            <div className="flex justify-between text-[10px] text-slate-400 font-medium">
+              <span>1.0x (No variation)</span>
+              <span>1.4x (Standard factory)</span>
+              <span>3.0x (Extreme volatility)</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 3: Advanced Search Filters */}
+      <div id="filter-block" className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
         <h3 className="text-xs font-bold uppercase text-slate-400 tracking-wider mb-4 flex items-center gap-2">
-          <RefreshCw className="w-4 h-4" />
-          Filter Factor Ratios
+          <Search className="w-4 h-4" />
+          Filter Factory Stock Control Ledger
         </h3>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
-            <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-1.5">SKU Code</label>
+            <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">SKU Code</label>
             <input
               type="text"
               value={filters.sku}
@@ -261,7 +599,7 @@ export default function SafetyFactorTab() {
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-1.5">Item Name</label>
+            <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">Item Name</label>
             <input
               type="text"
               value={filters.itemName}
@@ -271,14 +609,14 @@ export default function SafetyFactorTab() {
               className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
             />
             <datalist id="tabSFNamesAutocomp">
-              {itemNamesList.map((name, idx) => (
-                <option key={idx} value={name} />
+              {itemNamesList.map((name, idxOr) => (
+                <option key={idxOr} value={name} />
               ))}
             </datalist>
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-1.5">Department</label>
+            <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">Department</label>
             <select
               value={filters.department}
               onChange={(e) => handleFilterChange("department", e.target.value)}
@@ -293,32 +631,26 @@ export default function SafetyFactorTab() {
             </select>
           </div>
 
-          <div className="lg:col-span-2">
-            <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-1.5">Safety Factor Boundaries</label>
-            <div className="flex gap-2">
-              <input
-                type="number"
-                value={filters.minSF}
-                onChange={(e) => handleFilterChange("minSF", e.target.value)}
-                placeholder="Min SF Ratio"
-                step="0.1"
-                className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2 outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-              <input
-                type="number"
-                value={filters.maxSF}
-                onChange={(e) => handleFilterChange("maxSF", e.target.value)}
-                placeholder="Max SF Ratio"
-                step="0.1"
-                className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2 outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
+          <div>
+            <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">Stock Status Alert</label>
+            <select
+              value={filters.statusFilter}
+              onChange={(e) => handleFilterChange("statusFilter", e.target.value)}
+              className="w-full text-sm border border-slate-200 rounded-xl px-3.5 py-2.5 bg-white outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="All">All Items</option>
+              <option value="Normal">Normal (Above Reorder Level)</option>
+              <option value="Purchase Required">Purchase Required (At Reorder Level)</option>
+              <option value="Critical">Critical (Below Safety Stock)</option>
+              <option value="Production Stop">Production Stop (Zero Stock)</option>
+              <option value="Overstocked">Overstocked Warning</option>
+            </select>
           </div>
         </div>
 
         <div className="mt-5 pt-4 border-t border-slate-100 flex justify-between items-center bg-slate-50/20">
-          <span className="text-xs font-bold text-indigo-600">
-            {totalCount} item safety logs matched
+          <span className="text-xs font-bold text-indigo-650">
+            Showing {filteredCalculatedRows.length} of {allItems.length} stock ledger items
           </span>
           <div className="flex gap-2">
             <button
@@ -327,99 +659,134 @@ export default function SafetyFactorTab() {
             >
               Reset Parameters
             </button>
-            <button
-              onClick={() => loadSafetyFactorData(1)}
-              className="px-5 py-2.5 bg-slate-900 border border-slate-950 text-white font-semibold rounded-xl text-xs hover:bg-slate-800 transition-colors"
-            >
-              Search Safety Levels
-            </button>
           </div>
         </div>
       </div>
 
-      {/* Analysis Grid data layout */}
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+      {/* SECTION 4: Simple Factory Stock Control System Table View */}
+      <div id="analysis-grid-container" className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-slate-600 text-sm">
             <thead className="bg-slate-50 text-[10px] uppercase font-bold tracking-wider text-slate-400 border-b border-slate-100">
               <tr>
-                <th className="px-6 py-4 text-left">SKU</th>
-                <th className="px-6 py-4 text-left">Description</th>
-                <th className="px-6 py-4 text-left">Department</th>
-                <th className="px-6 py-4 text-left">Current Reserves</th>
-                <th className="px-6 py-3.5 text-left">Net Inventory Valuation</th>
-                <th className="px-6 py-4 text-left">Daily Out Cons (ADC)</th>
-                <th className="px-6 py-4 text-left">Lead Days</th>
-                <th className="px-6 py-4 text-left">Calculated Safety Factor</th>
-                <th className="px-6 py-4 text-right">Warning Level</th>
+                <th className="px-5 py-4 text-left">SKU</th>
+                <th className="px-5 py-4 text-left">Item Description</th>
+                <th className="px-5 py-4 text-left">Dept</th>
+                <th className="px-5 py-4 text-right">Current Stock</th>
+                <th className="px-4 py-4 text-right">Avg Daily (ADU)</th>
+                <th className="px-4 py-4 text-right">Max Daily (MDU)</th>
+                <th className="px-4 py-3.5 text-center">Lead Time</th>
+                <th className="px-5 py-4 text-right font-bold text-indigo-650">Safety Stock</th>
+                <th className="px-5 py-4 text-right font-bold text-indigo-650">Reorder Level</th>
+                <th className="px-4 py-4 text-center">Inv. Days</th>
+                <th className="px-5 py-4 text-center">Status</th>
+                <th className="px-5 py-4 text-right">Overstock Alert</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={9} className="py-24 text-center">
+                  <td colSpan={12} className="py-24 text-center">
                     <div className="flex flex-col items-center justify-center gap-3">
                       <div className="w-8 h-8 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin" />
-                      <span className="text-xs font-semibold text-slate-400">Loading safety stats...</span>
+                      <span className="text-xs font-semibold text-slate-400">Evaluating stock buffers dynamically...</span>
                     </div>
                   </td>
                 </tr>
-              ) : items.length > 0 ? (
-                items.map((item) => {
-                  const sf = Number(item.safety_factor) || 0;
-                  const state = getSFStatus(sf);
-                  const cellBg = getHeatMapShading(sf);
-
-                  const badges: { [key: string]: string } = {
-                    Critical: "bg-rose-50 text-rose-700 border-rose-100",
-                    Low: "bg-amber-50 text-amber-700 border-amber-100",
-                    Normal: "bg-emerald-50 text-emerald-700 border-emerald-100",
-                    High: "bg-indigo-50 text-indigo-700 border-indigo-100",
+              ) : paginatedRows.length > 0 ? (
+                paginatedRows.map((item) => {
+                  // Badges matching requests
+                  const badges = {
+                    "Production Stop": "bg-rose-100 text-rose-750 border-rose-200 font-extrabold animate-pulse",
+                    "Critical": "bg-orange-50 text-orange-700 border-orange-100 font-bold",
+                    "Purchase Required": "bg-amber-50 text-amber-700 border-amber-100 font-bold",
+                    "Normal": "bg-emerald-50 text-emerald-700 border-emerald-100 font-medium"
                   };
 
                   return (
-                    <tr key={item.sku} className="hover:bg-slate-50/60 transition-colors font-medium">
-                      <td className="px-6 py-3.5 font-bold text-slate-900 whitespace-nowrap">{item.sku}</td>
-                      <td className="px-6 py-3 text-slate-900 font-bold max-w-sm">{item.item_name}</td>
-                      <td className="px-6 py-3.5 text-slate-500 whitespace-nowrap">{item.department}</td>
-                      <td className="px-6 py-3.5 font-extrabold text-slate-800 whitespace-nowrap">
-                        {formatNumber(item.quantity)}
+                    <tr key={item.sku} className="hover:bg-slate-50/50 transition-colors font-medium">
+                      {/* SKU */}
+                      <td className="px-5 py-3.5 font-bold text-slate-900 whitespace-nowrap">
+                        {item.sku}
                       </td>
-                      <td className="px-6 py-3 font-extrabold text-slate-900 whitespace-nowrap">
-                        {formatCurrency(item.stock_value)}
+
+                      {/* Description */}
+                      <td className="px-5 py-3.5 text-slate-900 font-semibold max-w-xs truncate" title={item.item_name}>
+                        {item.item_name}
                       </td>
-                      <td className="px-6 py-3.5 text-slate-600 font-semibold whitespace-nowrap">
-                        {formatNumber(item.avg_daily_consumption, 4)}
+
+                      {/* Department */}
+                      <td className="px-5 py-3.5 text-slate-500 text-xs whitespace-nowrap">
+                        {item.department}
                       </td>
-                      <td className="px-6 py-3.5 text-xs text-slate-400 font-semibold whitespace-nowrap">
-                        {item.lead_time || 7} days
+
+                      {/* Current Stock */}
+                      <td className="px-5 py-3.5 font-black text-slate-800 text-right whitespace-nowrap">
+                        {formatNumber(item.quantity)} <span className="text-[10px] text-slate-400 font-normal">{item.unit || "pcs"}</span>
                       </td>
-                      {/* Interactive heatmap dynamic background color */}
-                      <td
-                        className="px-6 py-3.5 font-extrabold text-slate-900 whitespace-nowrap transition-colors"
-                        style={{ backgroundColor: cellBg }}
-                      >
-                        {formatNumber(sf, 2)}
+
+                      {/* Avg Daily Usage (ADU) */}
+                      <td className="px-4 py-3.5 text-slate-600 text-right font-mono text-xs whitespace-nowrap">
+                        {formatNumber(item.adu, 2)}
                       </td>
-                      <td className="px-6 py-3.5 text-right whitespace-nowrap">
-                        <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-extrabold border uppercase tracking-wider ${
-                            badges[state] || ""
-                          }`}
-                        >
-                          {state}
+
+                      {/* Max Daily Usage (MDU) */}
+                      <td className="px-4 py-3.5 text-slate-600 text-right font-mono text-xs whitespace-nowrap">
+                        {formatNumber(item.mdu, 2)}
+                      </td>
+
+                      {/* Lead Time */}
+                      <td className="px-4 py-3.5 text-xs text-slate-400 text-center whitespace-nowrap font-bold">
+                        {item.lt}d
+                      </td>
+
+                      {/* Safety Stock */}
+                      <td className="px-5 py-3.5 font-extrabold text-slate-900 text-right whitespace-nowrap bg-indigo-50/20">
+                        {formatNumber(item.safetyStock, 1)}
+                      </td>
+
+                      {/* Reorder Level */}
+                      <td className="px-5 py-3.5 font-extrabold text-slate-900 text-right whitespace-nowrap bg-indigo-100/10">
+                        {formatNumber(item.reorderLevel, 1)}
+                      </td>
+
+                      {/* Inventory Days */}
+                      <td className="px-4 py-3.5 text-center font-bold text-xs whitespace-nowrap">
+                        <span className={item.inventoryDays > targetOverstockDays ? "text-indigo-650" : "text-slate-600"}>
+                          {item.inventoryDays > 365 ? "365d+" : `${item.inventoryDays.toFixed(0)} days`}
                         </span>
+                      </td>
+
+                      {/* Low Stock status badge matching logic */}
+                      <td className="px-5 py-3.5 text-center whitespace-nowrap">
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[10px] uppercase tracking-wider border ${badges[item.status]}`}>
+                          {item.status}
+                        </span>
+                      </td>
+
+                      {/* Overstock Alert Badge */}
+                      <td className="px-5 py-3.5 text-right whitespace-nowrap">
+                        {item.overstocked ? (
+                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-rose-50 text-rose-700 border border-rose-100 animate-pulse">
+                            <Flame className="w-3 h-3 text-rose-500 fill-rose-500" />
+                            Overstock
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold text-slate-350 bg-slate-50 border border-slate-100 px-2 py-0.5 rounded-full">
+                            Optimal
+                          </span>
+                        )}
                       </td>
                     </tr>
                   );
                 })
               ) : (
                 <tr>
-                  <td colSpan={9} className="py-24 text-center">
+                  <td colSpan={12} className="py-24 text-center">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <XCircle className="w-10 h-10 text-slate-300" />
                       <span className="text-sm font-bold text-slate-700">Empty Record Set matched</span>
-                      <span className="text-xs text-slate-400">Reduce strictness of search bounds.</span>
+                      <span className="text-xs text-slate-400">Reduce strictness of search filters.</span>
                     </div>
                   </td>
                 </tr>
@@ -428,15 +795,15 @@ export default function SafetyFactorTab() {
           </table>
         </div>
 
-        {/* Dynamic Pagination Bar */}
+        {/* Pagination Controls */}
         {!loading && totalPages > 1 && (
           <div className="px-6 py-4.5 border-t border-slate-100 bg-slate-50 flex items-center justify-between text-xs font-semibold text-slate-500">
             <span>
-              Page {page} of {totalPages} ({totalCount} items matched)
+              Page {page} of {totalPages} ({filteredCalculatedRows.length} items filtered)
             </span>
             <div className="flex items-center gap-1">
               <button
-                onClick={() => loadSafetyFactorData(page - 1)}
+                onClick={() => setPage(p => Math.max(1, p - 1))}
                 disabled={page <= 1}
                 className="p-2 border border-slate-200 rounded-xl bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-50 transition-colors"
               >
@@ -450,7 +817,7 @@ export default function SafetyFactorTab() {
                     <React.Fragment key={pNum}>
                       {prev && pNum - prev > 1 && <span className="px-1 text-slate-400">...</span>}
                       <button
-                        onClick={() => loadSafetyFactorData(pNum)}
+                        onClick={() => setPage(pNum)}
                         className={`w-8 h-8 rounded-xl font-bold border transition-all ${
                           pNum === page
                             ? "bg-indigo-600 border-indigo-600 text-white shadow-md shadow-indigo-100"
@@ -463,7 +830,7 @@ export default function SafetyFactorTab() {
                   );
                 })}
               <button
-                onClick={() => loadSafetyFactorData(page + 1)}
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                 disabled={page >= totalPages}
                 className="p-2 border border-slate-200 rounded-xl bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-50 transition-colors"
               >
@@ -472,6 +839,40 @@ export default function SafetyFactorTab() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* SECTION 5: Simple Factory Stock Control System Summary Cheat Sheet */}
+      <div id="cheat-sheet-pillar" className="bg-slate-50 border border-slate-200 rounded-2xl p-6">
+        <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
+          <Warehouse className="w-4 h-4 text-indigo-650" />
+          Simple Factory Stock Control System Overview
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+            <span className="text-[10px] font-bold text-indigo-650 uppercase tracking-widest block mb-1">Safety Stock</span>
+            <p className="text-xs text-slate-650 leading-relaxed">
+              Extra emergency stock kept to avoid production stopping when material delivery is delayed. Prevents stock-outs.
+            </p>
+          </div>
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+            <span className="text-[10px] font-bold text-amber-600 uppercase tracking-widest block mb-1">Reorder Level</span>
+            <p className="text-xs text-slate-650 leading-relaxed">
+              Determines exactly when to trigger a purchase order to prevent diving below Safety Stock levels during lead days.
+            </p>
+          </div>
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+            <span className="text-[10px] font-bold text-rose-500 uppercase tracking-widest block mb-1">Maximum Level</span>
+            <p className="text-xs text-slate-650 leading-relaxed">
+              Avoids expensive overstock issues. Formulated using target coverage limit days to maintain streamlined operations.
+            </p>
+          </div>
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+            <span className="text-[10px] font-bold text-orange-500 uppercase tracking-widest block mb-1">Minimum Level</span>
+            <p className="text-xs text-slate-650 leading-relaxed">
+              Avoids shortages and stock depletion. Any drop below Safety Stock triggers a priority status action state.
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   );
