@@ -55,7 +55,7 @@ export default function LatestStockTab() {
         }
       }
 
-      let q = "?select=*&order=sku.asc";
+      let q = "?select=*&order=quantity.desc";
       if (filters.sku) q += `&sku=ilike.*${filters.sku}*`;
       if (filters.itemName) q += `&item_name=ilike.*${filters.itemName}*`;
       if (filters.department !== "All") q += `&department=eq.${encodeURIComponent(filters.department)}`;
@@ -74,6 +74,13 @@ export default function LatestStockTab() {
           return status === filters.status;
         });
       }
+
+      // Keep default sort by Quantity descending (High to Low)
+      filtered = [...filtered].sort((a, b) => {
+        const qtyA = Number(a.quantity || 0);
+        const qtyB = Number(b.quantity || 0);
+        return qtyB - qtyA;
+      });
 
       setTotalCount(filtered.length);
 
@@ -106,9 +113,14 @@ export default function LatestStockTab() {
     // Directly call the load with zeroed filter values
     setTimeout(() => {
       setLoading(true);
-      fetchAllRows("latest_stock", "*", "?select=*&order=sku.asc").then((data) => {
-        setTotalCount(data.length);
-        setStockItems(data.slice(0, 20));
+      fetchAllRows("latest_stock", "*", "?select=*&order=quantity.desc").then((data) => {
+        const sortedData = [...data].sort((a, b) => {
+          const qtyA = Number(a.quantity || 0);
+          const qtyB = Number(b.quantity || 0);
+          return qtyB - qtyA;
+        });
+        setTotalCount(sortedData.length);
+        setStockItems(sortedData.slice(0, 20));
         setLoading(false);
       });
     }, 10);
