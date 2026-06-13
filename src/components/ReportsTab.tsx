@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { fetchAllRows, sbGet, formatCurrency, formatNumber, formatDate, formatDateTime } from "../utils/supabase";
-import { LatestStockItem, Transaction, DepartmentValuation } from "../types";
+import { LatestStockItem, Transaction, DepartmentValuation, ClosingStockItem } from "../types";
 import { 
   AlertCircle, ArrowLeft, Ban, Bolt, Building2, Calendar, FileOutput, HelpCircle, 
   History, Hammer, TrendingUp, AlertTriangle, Download, Search, ArrowUpDown, 
@@ -309,61 +309,152 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
     }
   }
 
+  function calculateDynamicStockLevels(
+    ls: LatestStockItem[], 
+    csRows: ClosingStockItem[], 
+    ioRows: Transaction[], 
+    startLimit: string, 
+    endLimit: string, 
+    isMonthMode: boolean
+  ): any[] {
+    // Map closing stock by SKU, filtering out records registered AFTER the target end limit
+    const csMap: { [sku: string]: { quantity: number; stock_value: number; price?: number; item_name?: string; department?: string; unit?: string } } = {};
+    csRows.forEach((row) => {
+      if (row.sku) {
+        if (row.date) {
+          if (isMonthMode) {
+            const rowMonth = row.date.substring(0, 7);
+            if (endLimit && rowMonth > endLimit) return;
+          } else {
+            if (endLimit && row.date > endLimit) return;
+          }
+        }
+        const sku = row.sku;
+        if (!csMap[sku]) {
+          csMap[sku] = { quantity: 0, stock_value: 0, item_name: row.item_name, department: row.department, unit: row.unit };
+        }
+        csMap[sku].quantity += Number(row.quantity) || 0;
+        csMap[sku].stock_value += Number(row.stock_value) || 0;
+        if (row.price) {
+          csMap[sku].price = Number(row.price);
+        }
+      }
+    });
+
+    // Gather all unique SKUs across latest_stock, closing_stock, and in_out_manual
+    const skuSet = new Set<string>();
+    ls.forEach(item => skuSet.add(item.sku));
+    csRows.forEach(row => skuSet.add(row.sku));
+    ioRows.forEach(tx => skuSet.add(tx.sku));
+
+    const calculatedItems: any[] = [];
+
+    skuSet.forEach((sku) => {
+      const masterItem = ls.find(item => item.sku === sku);
+      const closingRow = csMap[sku];
+      const txsForSku = ioRows.filter(tx => tx.sku === sku);
+
+      const itemName = masterItem?.item_name || closingRow?.item_name || (txsForSku.length > 0 ? txsForSku[0].item_name : "") || "Unknown SKU " + sku;
+      const unit = masterItem?.unit || closingRow?.unit || "Piece";
+      const department = masterItem?.department || closingRow?.department || (txsForSku.length > 0 ? txsForSku[0].department : "General") || "General";
+
+      // Filter transactions up to the END limit
+      const filteredTxs = txsForSku.filter((tx) => {
+        if (!tx.date) return false;
+        if (isMonthMode) {
+          const txMonth = tx.date.substring(0, 7);
+          return endLimit ? txMonth <= endLimit : true;
+        } else {
+          return endLimit ? tx.date <= endLimit : true;
+        }
+      });
+
+      // Sum In and Out transactions up to the end limits
+      let totalIn = 0;
+      let totalOut = 0;
+      filteredTxs.forEach((tx) => {
+        const qty = Number(tx.quantity) || 0;
+        if (tx.in_out === "In") {
+          totalIn += qty;
+        } else if (tx.in_out === "Out") {
+          totalOut += qty;
+        }
+      });
+
+      const closingQty = closingRow?.quantity || 0;
+      const closingVal = closingRow?.stock_value || 0;
+
+      // Dynamic reserves quantity: closing_stock qty + In - Out
+      const computedQty = closingQty + totalIn - totalOut;
+
+      // Find unit price as of this period range
+      let price = 0;
+      if (closingQty > 0 && closingVal > 0) {
+        price = closingVal / closingQty;
+      } else if (filteredTxs.length > 0) {
+        const sortedPeriodTxs = [...filteredTxs].sort((a, b) => {
+          const db = b.timestamp ? new Date(b.timestamp).getTime() : (b.date ? new Date(b.date).getTime() : 0);
+          const da = a.timestamp ? new Date(a.timestamp).getTime() : (a.date ? new Date(a.date).getTime() : 0);
+          return db - da;
+        });
+        const latestTxWithPrice = sortedPeriodTxs.find((t) => (Number(t.quantity) || 0) > 0 && (Number(t.stock_value) || 0) > 0);
+        if (latestTxWithPrice) {
+          price = (Number(latestTxWithPrice.stock_value) || 0) / (Number(latestTxWithPrice.quantity) || 0);
+        }
+      }
+
+      if (price === 0) {
+        price = masterItem ? (Number(masterItem.price) || 0) : (closingRow?.price || 0);
+      }
+
+      const computedValuation = computedQty * price;
+
+      // Establish timeline point of the last update inside our date limit
+      let lastUpdatedStr = "";
+      if (filteredTxs.length > 0) {
+        const sortedTxsDesc = [...filteredTxs].sort((a, b) => b.date.localeCompare(a.date));
+        lastUpdatedStr = sortedTxsDesc[0].timestamp || sortedTxsDesc[0].date;
+      } else if (closingRow && csRows.find(r => r.sku === sku)?.date) {
+        lastUpdatedStr = csRows.find(r => r.sku === sku)!.date;
+      } else if ((masterItem as any)?.last_updated) {
+        lastUpdatedStr = (masterItem as any).last_updated;
+      } else {
+        lastUpdatedStr = masterItem?.created_at || "";
+      }
+
+      // Filter: only include positive stock items at the target period endpoint
+      if (computedQty > 0) {
+        calculatedItems.push({
+          sku,
+          item_name: itemName,
+          unit,
+          department,
+          quantity: computedQty,
+          price: price,
+          stock_value: computedValuation,
+          last_updated: lastUpdatedStr || endLimit
+        });
+      }
+    });
+
+    return calculatedItems;
+  }
+
   async function runDateWiseStockReport() {
     setLoading(true);
     try {
-      const ls: LatestStockItem[] = await fetchAllRows("latest_stock");
-      let positiveStockItems = ls.filter((item) => Number(item.quantity) > 0);
-      let matchingSkuSet = new Set<string>();
+      const [ls, csRows, ioRows]: [LatestStockItem[], ClosingStockItem[], Transaction[]] = await Promise.all([
+        fetchAllRows("latest_stock"),
+        fetchAllRows("closing_stock", "*"),
+        fetchAllRows("in_out_manual", "*")
+      ]);
 
-      if (dateWiseType === "day") {
-        let q = `?select=sku,date&in_out=eq.In`;
-        if (selectedDateStart) q += `&date=gte.${selectedDateStart}`;
-        if (selectedDateEnd) q += `&date=lte.${selectedDateEnd}`;
-        
-        const txs: { sku: string; date: string }[] = await fetchAllRows("in_out_manual", "sku,date", q);
-        txs.forEach((tx) => matchingSkuSet.add(tx.sku));
+      const isMonthMode = dateWiseType === "month";
+      const startLimit = isMonthMode ? selectedMonthStart : selectedDateStart;
+      const endLimit = isMonthMode ? selectedMonthEnd : selectedDateEnd;
 
-        positiveStockItems = positiveStockItems.filter((item) => {
-          if (matchingSkuSet.has(item.sku)) return true;
-          
-          const dStr = (item as any).last_updated || item.updated_at || item.created_at;
-          if (!dStr) return false;
-          const dt = dStr.split("T")[0];
-          
-          const matchesStart = selectedDateStart ? dt >= selectedDateStart : true;
-          const matchesEnd = selectedDateEnd ? dt <= selectedDateEnd : true;
-          return matchesStart && matchesEnd;
-        });
-      } else {
-        let q = `?select=sku,date&in_out=eq.In`;
-        const txs: { sku: string; date: string }[] = await fetchAllRows("in_out_manual", "sku,date", q);
-        
-        txs.forEach((tx) => {
-          if (tx.date) {
-            const txMonth = tx.date.substring(0, 7);
-            const matchesStart = selectedMonthStart ? txMonth >= selectedMonthStart : true;
-            const matchesEnd = selectedMonthEnd ? txMonth <= selectedMonthEnd : true;
-            if (matchesStart && matchesEnd) {
-              matchingSkuSet.add(tx.sku);
-            }
-          }
-        });
-
-        positiveStockItems = positiveStockItems.filter((item) => {
-          if (matchingSkuSet.has(item.sku)) return true;
-
-          const dStr = (item as any).last_updated || item.updated_at || item.created_at;
-          if (!dStr) return false;
-          const itemMonth = dStr.substring(0, 7);
-
-          const matchesStart = selectedMonthStart ? itemMonth >= selectedMonthStart : true;
-          const matchesEnd = selectedMonthEnd ? itemMonth <= selectedMonthEnd : true;
-          return matchesStart && matchesEnd;
-        });
-      }
-
-      setReportItems(positiveStockItems);
+      const calculated = calculateDynamicStockLevels(ls, csRows, ioRows, startLimit, endLimit, isMonthMode);
+      setReportItems(calculated);
     } catch (e: any) {
       alert(`Report processing failed: ${e.message}`);
     } finally {
@@ -702,39 +793,23 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
               setReportTitle("Date & Month-Wise Stock Level Report");
               setReportSubtitle("Review active products with positive stock counts at dates or months registration points.");
               
-              const defaultMonthStart = "2026-04";
-              const defaultMonthEnd = "2026-06";
+              const defaultMonthStart = "2025-12";
+              const defaultMonthEnd = "2026-04";
               
               setSelectedMonthStart(defaultMonthStart);
               setSelectedMonthEnd(defaultMonthEnd);
-              setSelectedDateStart("2026-04-01");
-              setSelectedDateEnd("2026-06-30");
+              setSelectedDateStart("2025-12-01");
+              setSelectedDateEnd("2026-04-30");
               setDateWiseType("month");
               setLoading(true);
 
               Promise.all([
                 fetchAllRows("latest_stock"),
-                fetchAllRows("in_out_manual", "sku,date", `?select=sku,date&in_out=eq.In`)
-              ]).then(([ls, txs]) => {
-                const matchingSkuSet = new Set<string>();
-                txs.forEach((tx) => {
-                  if (tx.date) {
-                    const txMonth = tx.date.substring(0, 7);
-                    if (txMonth >= defaultMonthStart && txMonth <= defaultMonthEnd) {
-                      matchingSkuSet.add(tx.sku);
-                    }
-                  }
-                });
-
-                const filtered = ls.filter((item) => Number(item.quantity) > 0).filter((item) => {
-                  if (matchingSkuSet.has(item.sku)) return true;
-                  const dStr = (item as any).last_updated || item.updated_at || item.created_at;
-                  if (!dStr) return false;
-                  const itemMonth = dStr.substring(0, 7);
-                  return itemMonth >= defaultMonthStart && itemMonth <= defaultMonthEnd;
-                });
-
-                setReportItems(filtered);
+                fetchAllRows("closing_stock", "*"),
+                fetchAllRows("in_out_manual", "*")
+              ]).then(([ls, csRows, ioRows]) => {
+                const calculated = calculateDynamicStockLevels(ls, csRows, ioRows, defaultMonthStart, defaultMonthEnd, true);
+                setReportItems(calculated);
                 setLoading(false);
               }).catch(() => setLoading(false));
             }}
