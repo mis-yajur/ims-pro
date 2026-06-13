@@ -3,9 +3,11 @@ import { fetchAllRows, sbGet, sbRpc, formatCurrency, formatNumber, recalculateAn
 import { LatestStockItem, Transaction } from "../types";
 import { DEPARTMENTS_LIST } from "../constants";
 import { FileOutput, RefreshCw, Search, ShieldCheck, Tag, XCircle, ChevronLeft, ChevronRight } from "lucide-react";
+import { LineChart, Line, Tooltip } from "recharts";
 
 interface ProcessedStockItem extends LatestStockItem {
   calculatedStatus: string;
+  trendData: { date: string; value: number }[];
 }
 
 export default function LatestStockTab() {
@@ -155,13 +157,45 @@ export default function LatestStockTab() {
           calculatedStatus = "Overstock";
         }
 
+        // Generate trend data for the last 30 days
+        const dates: string[] = [];
+        for (let i = 29; i >= 0; i--) {
+          const d = new Date();
+          d.setDate(d.getDate() - i);
+          dates.push(d.toISOString().split("T")[0]);
+        }
+
+        // Group transactions in the last 30 days by date for this SKU
+        const netChangesByDate: { [date: string]: number } = {};
+        txsForSku.forEach((tx) => {
+          const dStr = tx.date; // formatted as YYYY-MM-DD
+          if (dStr) {
+            const change = tx.in_out === "In" ? Number(tx.quantity) : -Number(tx.quantity);
+            netChangesByDate[dStr] = (netChangesByDate[dStr] || 0) + change;
+          }
+        });
+
+        // Current quantity represents the end of TODAY's (dates[29]) state
+        const stockHistory: { date: string; value: number }[] = new Array(30);
+        let currentBalance = currentStock;
+        stockHistory[29] = { date: dates[29], value: Math.max(0, currentBalance) };
+
+        // Go backwards day by day to calculate stock at the end of each preceding day
+        for (let i = 28; i >= 0; i--) {
+          const nextDate = dates[i + 1];
+          const netChangeOnNextDate = netChangesByDate[nextDate] || 0;
+          currentBalance = currentBalance - netChangeOnNextDate;
+          stockHistory[i] = { date: dates[i], value: Math.max(0, currentBalance) };
+        }
+
         return {
           ...item,
           avg_daily_consumption: calculatedAvgConsumption,
           safety_factor: safetyStock,
           moq: reorderLevel, // reorder point column, MOQ/Reorder point
           max_level: maxLevel,
-          calculatedStatus
+          calculatedStatus,
+          trendData: stockHistory
         };
       });
 
@@ -431,7 +465,7 @@ export default function LatestStockTab() {
       {/* Snapshot Grid Data */}
       <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-slate-600 text-sm">
+          <table className="w-full text-slate-600 text-sm font-sans">
             <thead className="bg-slate-50 text-[10px] uppercase font-bold tracking-wider text-slate-400 border-b border-slate-100">
               <tr>
                 <th className="px-6 py-4 text-left">SKU</th>
@@ -439,6 +473,7 @@ export default function LatestStockTab() {
                 <th className="px-6 py-4 text-left">Unit</th>
                 <th className="px-6 py-4 text-left">Department name</th>
                 <th className="px-6 py-4 text-left">Reserves Qty</th>
+                <th className="px-6 py-4 text-left">Trend (30D)</th>
                 <th className="px-6 py-3.5 text-left">Valuation Value</th>
                 <th className="px-6 py-4 text-left">Average Price</th>
                 <th className="px-6 py-4 text-left">ADC (Daily Issue)</th>
@@ -452,7 +487,7 @@ export default function LatestStockTab() {
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={13} className="py-24 text-center">
+                  <td colSpan={14} className="py-24 text-center">
                     <div className="flex flex-col items-center justify-center gap-3">
                       <div className="w-8 h-8 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin" />
                       <span className="text-xs font-semibold text-slate-400">Loading master stock sheets indexes...</span>
@@ -490,6 +525,44 @@ export default function LatestStockTab() {
                       <td className="px-6 py-3.5 font-extrabold text-slate-800 whitespace-nowrap">
                         {formatNumber(item.quantity)}
                       </td>
+                      <td className="px-6 py-3 whitespace-nowrap">
+                        <div className="flex items-center h-8 w-24">
+                          <LineChart width={100} height={28} data={item.trendData}>
+                            <Line
+                              type="monotone"
+                              dataKey="value"
+                              stroke={
+                                status === "Production Stop"
+                                  ? "#f43f5e" // rose 500
+                                  : status === "Critical"
+                                  ? "#f97316" // orange 500
+                                  : status === "Purchase Required"
+                                  ? "#f59e0b" // amber 500
+                                  : status === "Overstock"
+                                  ? "#6366f1" // indigo 500
+                                  : "#10b981" // emerald 500
+                              }
+                              strokeWidth={1.75}
+                              dot={false}
+                              isAnimationActive={false}
+                            />
+                            <Tooltip
+                              content={({ active, payload }) => {
+                                if (active && payload && payload.length) {
+                                  const data = payload[0].payload;
+                                  return (
+                                    <div className="bg-slate-900/95 text-white px-2 py-1 rounded text-[10px] font-mono shadow-lg border border-slate-700/50 z-50">
+                                      <p className="font-bold">{data.date}</p>
+                                      <p className="text-indigo-300">Qty: {formatNumber(data.value, 0)}</p>
+                                    </div>
+                                  );
+                                }
+                                return null;
+                              }}
+                            />
+                          </LineChart>
+                        </div>
+                      </td>
                       <td className="px-6 py-3 font-extrabold text-slate-900 whitespace-nowrap">
                         {formatCurrency(item.stock_value)}
                       </td>
@@ -519,7 +592,7 @@ export default function LatestStockTab() {
                 })
               ) : (
                 <tr>
-                  <td colSpan={13} className="py-24 text-center">
+                  <td colSpan={14} className="py-24 text-center">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <XCircle className="w-10 h-10 text-slate-300" />
                       <span className="text-sm font-bold text-slate-700">Empty Inventory Grid Matches</span>

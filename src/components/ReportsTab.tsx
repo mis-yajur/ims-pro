@@ -23,6 +23,9 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
 
   const [itemNamesList, setItemNamesList] = useState<string[]>([]);
 
+  const [selectedMonth, setSelectedMonth] = useState("");
+  const [selectedDate, setSelectedDate] = useState("");
+
   useEffect(() => {
     // Set default dates
     const today = new Date().toISOString().split("T")[0];
@@ -72,6 +75,7 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
         low_stock: "Low Stock Alert Report",
         in_but_not_out: "In But Not Out Registry",
         frequently_reordered: "Frequently Re-Order Items",
+        date_wise_stock: "Date & Month-Wise Stock Level Report",
       };
 
       const subs: { [key: string]: string } = {
@@ -84,6 +88,7 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
         low_stock: "Critical items currently falling below 20% of their maximum safety target level.",
         in_but_not_out: "Items received in the warehouse but not issued once.",
         frequently_reordered: "Items with multiple incoming transactions recorded.",
+        date_wise_stock: "Interactive report tracking active stock levels filtered by Month or Specific Dates.",
       };
 
       setReportTitle(titles[type] || "Analysis Report");
@@ -99,6 +104,20 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
           .slice(0, 50);
       } else if (type === "zero_value") {
         calculated = ls.filter((item) => Number(item.quantity) > 0 && (!item.stock_value || Number(item.stock_value) === 0));
+      } else if (type === "date_wise_stock") {
+        const today = new Date().toISOString().split("T")[0];
+        const defaultMonth = selectedMonth || today.substring(0, 7);
+        if (!selectedMonth) {
+          setSelectedMonth(defaultMonth);
+        }
+        calculated = ls.filter((item) => Number(item.quantity) > 0).filter((item) => {
+          const dStr = item.updated_at || item.created_at;
+          if (!dStr) return false;
+          if (selectedDate) {
+            return dStr.startsWith(selectedDate);
+          }
+          return dStr.startsWith(defaultMonth);
+        });
       } else if (type === "low_stock") {
         calculated = ls.filter((item) => {
           const qty = Number(item.quantity) || 0;
@@ -233,6 +252,33 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
     }
   }
 
+  async function runDateWiseStockReport() {
+    setLoading(true);
+    try {
+      const ls: LatestStockItem[] = await fetchAllRows("latest_stock");
+      
+      let filtered = ls.filter((item) => Number(item.quantity) > 0);
+
+      if (selectedDate) {
+        filtered = filtered.filter((item) => {
+          const dStr = item.updated_at || item.created_at;
+          return dStr ? dStr.startsWith(selectedDate) : false;
+        });
+      } else if (selectedMonth) {
+        filtered = filtered.filter((item) => {
+          const dStr = item.updated_at || item.created_at;
+          return dStr ? dStr.startsWith(selectedMonth) : false;
+        });
+      }
+
+      setReportItems(filtered);
+    } catch (e: any) {
+      alert(`Report processing failed: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function handleExport() {
     if (reportItems.length === 0) {
       alert("No data available to compile.");
@@ -258,6 +304,11 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
       csv = "Timestamp,SKU,In/Out,Date Ordered,Quantity,Item Description,Transaction Value,Department,Rank Orders Count\n";
       reportItems.forEach((r) => {
         csv += `"${r.timestamp}","${r.sku}","${r.in_out}","${r.date}",${r.quantity},"${r.item_name}",${r.stock_value},"${r.department || ""}",${r.frequency}\n`;
+      });
+    } else if (activeReport === "date_wise_stock") {
+      csv = "SKU,Item Name,Department,Reserves Quantity,Price,Stock Valuation (₹),Last Updated\n";
+      reportItems.forEach((r) => {
+        csv += `"${r.sku}","${r.item_name}","${r.department || ""}",${r.quantity},${r.price},${r.stock_value},"${r.updated_at || r.created_at || ""}"\n`;
       });
     } else {
       csv = "SKU,Item Name Description,Department,Quantity,Stock Valuation Value (₹)\n";
@@ -473,6 +524,42 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
               Review and audit fast-reordered components within warehouse dating records.
             </p>
           </div>
+
+          {/* 10: Date Wise Stock */}
+          <div
+            onClick={() => {
+              setActiveReport("date_wise_stock");
+              setReportTitle("Date & Month-Wise Stock Level Report");
+              setReportSubtitle("Review active products with positive stock counts at dates or months registration points.");
+              const today = new Date().toISOString().split("T")[0];
+              const defaultMonth = today.substring(0, 7);
+              setSelectedMonth(defaultMonth);
+              setSelectedDate("");
+              setLoading(true);
+              fetchAllRows("latest_stock").then((ls) => {
+                const filtered = ls.filter((item) => Number(item.quantity) > 0).filter((item) => {
+                  const dStr = item.updated_at || item.created_at;
+                  return dStr ? dStr.startsWith(defaultMonth) : false;
+                });
+                setReportItems(filtered);
+                setLoading(false);
+              }).catch(() => setLoading(false));
+            }}
+            className="bg-white border border-slate-200 rounded-2xl p-6 hover:border-indigo-500 hover:shadow-md transition-all cursor-pointer relative group"
+          >
+            <div className="flex items-start justify-between">
+              <span className="p-3 bg-emerald-50 text-emerald-650 rounded-xl group-hover:scale-105 transition-transform">
+                <Calendar className="w-6 h-6" />
+              </span>
+              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-emerald-50 text-emerald-700 uppercase tracking-widest border border-emerald-100">
+                Date Wise
+              </span>
+            </div>
+            <h3 className="text-lg font-bold text-slate-900 mt-5">Date Wise Stock Report</h3>
+            <p className="text-xs text-slate-500 mt-2 leading-relaxed">
+              Analyze incoming products holding positive stock coming from the latest stock sheets, filtered by date or month.
+            </p>
+          </div>
         </div>
       )}
 
@@ -574,6 +661,48 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
             </div>
           )}
 
+          {activeReport === "date_wise_stock" && (
+            <div className="p-6 border-b border-slate-100 bg-indigo-50/20 flex flex-col md:flex-row md:items-end gap-4">
+              <div className="w-full md:w-1/3">
+                <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1.5">
+                  Filter by Month
+                </label>
+                <input
+                  type="month"
+                  value={selectedMonth}
+                  onChange={(e) => {
+                    setSelectedMonth(e.target.value);
+                    setSelectedDate("");
+                  }}
+                  className="w-full text-xs font-semibold border border-slate-200 rounded-xl px-3.5 py-2 outline-none focus:ring-2 focus:ring-indigo-500 bg-white cursor-pointer"
+                />
+              </div>
+
+              <div className="w-full md:w-1/3">
+                <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1.5">
+                  Filter by Specific Day
+                </label>
+                <input
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => {
+                    setSelectedDate(e.target.value);
+                    setSelectedMonth("");
+                  }}
+                  className="w-full text-xs font-semibold border border-slate-200 rounded-xl px-3.5 py-2 outline-none focus:ring-2 focus:ring-indigo-500 bg-white cursor-pointer"
+                />
+              </div>
+
+              <button
+                onClick={runDateWiseStockReport}
+                className="px-5 py-2.5 bg-indigo-650 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
+              >
+                <Calendar className="w-4 h-4" />
+                Refresh Date Wise Report
+              </button>
+            </div>
+          )}
+
           {/* Grid View table */}
           <div className="overflow-x-auto">
             {loading ? (
@@ -583,6 +712,45 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
                   <span className="text-xs font-bold text-slate-400">Performing math on database view...</span>
                 </div>
               </div>
+            ) : activeReport === "date_wise_stock" ? (
+              <table className="w-full text-slate-650 text-sm">
+                <thead className="bg-slate-50 text-[10px] uppercase font-bold tracking-wider text-slate-400 border-b border-slate-100">
+                  <tr>
+                    <th className="px-6 py-4 text-left">SKU</th>
+                    <th className="px-6 py-4 text-left">Item Name Description</th>
+                    <th className="px-6 py-4 text-left">Department Division</th>
+                    <th className="px-6 py-4 text-left">Reserves Qty</th>
+                    <th className="px-6 py-4 text-left">Unit Price</th>
+                    <th className="px-6 py-4 text-left">Stock Valuation (₹)</th>
+                    <th className="px-6 py-4 text-right">Last Updated Point</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {reportItems.length > 0 ? (
+                    reportItems.map((item, i) => (
+                      <tr key={i} className="hover:bg-slate-50/60 transition-colors font-medium">
+                        <td className="px-6 py-4 text-slate-900 font-bold whitespace-nowrap">{item.sku}</td>
+                        <td className="px-6 py-4 font-bold text-slate-900">{item.item_name}</td>
+                        <td className="px-6 py-4 text-slate-500 font-semibold">{item.department}</td>
+                        <td className="px-6 py-4 font-extrabold text-slate-850">
+                          {formatNumber(item.quantity)} <span className="text-[10px] font-bold text-slate-400">{item.unit || "pcs"}</span>
+                        </td>
+                        <td className="px-6 py-4 font-bold text-slate-600">{formatCurrency(item.price)}</td>
+                        <td className="px-6 py-4 font-black text-slate-950">{formatCurrency(item.stock_value)}</td>
+                        <td className="px-6 py-4 text-right text-xs text-slate-400 font-semibold font-mono whitespace-nowrap">
+                          {formatDateTime(item.updated_at || item.created_at)}
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={7} className="py-24 text-center text-slate-400 font-semibold">
+                        No active stock reserves matching the picked dates range filters.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             ) : activeReport === "dept_value" ? (
               <table className="w-full text-slate-650 text-sm">
                 <thead className="bg-slate-50 text-[10px] uppercase font-bold tracking-wider text-slate-400 border-b border-slate-100">
