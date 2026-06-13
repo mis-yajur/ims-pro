@@ -75,22 +75,23 @@ export default function App() {
               </div>
 
               {/* Desktop Nav Actions */}
-              <nav className="hidden lg:flex items-center gap-1">
+              <nav className="hidden lg:flex items-center gap-1.5 bg-slate-100/90 p-1 rounded-2xl border border-slate-200 shadow-[inset_0_1.5px_3px_rgba(15,23,42,0.03)]">
                 {[
                   { id: "dashboard", label: "Dashboard" },
                   { id: "in-out", label: "Transactions" },
                   { id: "latest-stock", label: "Latest Stock" },
                   { id: "safety-factor", label: "Safety Factors" },
-                  { id: "reports", label: "Diagnostic Reports" },
+                  { id: "reports", label: "Report" },
                   { id: "new-item", label: "Register New SKU" },
                 ].map((item) => (
                   <button
                     key={item.id}
+                    id={`nav-tab-${item.id}`}
                     onClick={() => handleSwitchTab(item.id)}
-                    className={`px-4 py-2 text-sm font-semibold rounded-xl transition-all cursor-pointer ${
+                    className={`px-4 py-2 text-sm font-bold rounded-xl transition-all cursor-pointer ${
                       activeTab === item.id
-                        ? "bg-slate-100 text-slate-900"
-                        : "text-slate-500 hover:text-slate-800 hover:bg-slate-50/50"
+                        ? "bg-white text-indigo-600 shadow-[0_2px_8px_rgba(79,70,229,0.08)] border border-slate-200/40"
+                        : "text-slate-600 hover:text-slate-900 hover:bg-white/55"
                     }`}
                   >
                     {item.label}
