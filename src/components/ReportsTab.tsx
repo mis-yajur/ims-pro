@@ -317,18 +317,10 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
     endLimit: string, 
     isMonthMode: boolean
   ): any[] {
-    // Map closing stock by SKU, filtering out records registered AFTER the target end limit
+    // Map closing stock by SKU, keeping the baseline stock regardless of the report date limits
     const csMap: { [sku: string]: { quantity: number; stock_value: number; price?: number; item_name?: string; department?: string; unit?: string } } = {};
     csRows.forEach((row) => {
       if (row.sku) {
-        if (row.date) {
-          if (isMonthMode) {
-            const rowMonth = row.date.substring(0, 7);
-            if (endLimit && rowMonth > endLimit) return;
-          } else {
-            if (endLimit && row.date > endLimit) return;
-          }
-        }
         const sku = row.sku;
         if (!csMap[sku]) {
           csMap[sku] = { quantity: 0, stock_value: 0, item_name: row.item_name, department: row.department, unit: row.unit };
