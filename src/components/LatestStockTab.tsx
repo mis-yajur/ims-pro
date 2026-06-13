@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { fetchAllRows, sbGet, sbRpc, formatCurrency, formatNumber, recalculateAndPatchLatestStock } from "../utils/supabase";
-import { LatestStockItem, Transaction } from "../types";
+import { LatestStockItem, Transaction, ClosingStockItem } from "../types";
 import { DEPARTMENTS_LIST } from "../constants";
 import { FileOutput, RefreshCw, Search, ShieldCheck, Tag, XCircle, ChevronLeft, ChevronRight } from "lucide-react";
 import { LineChart, Line, Tooltip } from "recharts";
@@ -8,6 +8,10 @@ import { LineChart, Line, Tooltip } from "recharts";
 interface ProcessedStockItem extends LatestStockItem {
   calculatedStatus: string;
   trendData: { date: string; value: number }[];
+  closingQty: number;
+  closingVal: number;
+  totalIn: number;
+  totalOut: number;
 }
 
 export default function LatestStockTab() {
@@ -73,8 +77,22 @@ export default function LatestStockTab() {
         }
       }
 
-      // Fetch manual Transactions
-      const io: Transaction[] = await fetchAllRows("in_out_manual", "*");
+      // Fetch manual Transactions and closing stock records
+      const [io, csRows]: [Transaction[], ClosingStockItem[]] = await Promise.all([
+        fetchAllRows("in_out_manual", "*"),
+        fetchAllRows("closing_stock", "*")
+      ]);
+
+      // Map closing stock by SKU
+      const csMap: { [sku: string]: { quantity: number; stock_value: number } } = {};
+      csRows.forEach((row) => {
+        if (row.sku) {
+          csMap[row.sku] = {
+            quantity: (csMap[row.sku]?.quantity || 0) + (Number(row.quantity) || 0),
+            stock_value: (csMap[row.sku]?.stock_value || 0) + (Number(row.stock_value) || 0)
+          };
+        }
+      });
 
       // Filter to find all active SKUs in the last 6 months list
       const activeSkusInLast6Months = new Set<string>();
@@ -108,6 +126,21 @@ export default function LatestStockTab() {
       // Calculate client-side average consumption, safety factor and status
       const processed: ProcessedStockItem[] = activeMatching.map((item) => {
         const txsForSku = io.filter(tx => tx.sku === item.sku);
+
+        const closingRow = csMap[item.sku] || { quantity: 0, stock_value: 0 };
+        const csQty = closingRow.quantity;
+        const csVal = closingRow.stock_value;
+
+        // Sum manual In / Out
+        let tIn = 0;
+        let tOut = 0;
+        txsForSku.forEach(tx => {
+          if (tx.in_out === "In") {
+            tIn += Number(tx.quantity) || 0;
+          } else if (tx.in_out === "Out") {
+            tOut += Number(tx.quantity) || 0;
+          }
+        });
 
         // Find average daily consumption based on manual "Out" transactions
         let totalConsumed = 0;
@@ -195,7 +228,11 @@ export default function LatestStockTab() {
           moq: reorderLevel, // reorder point column, MOQ/Reorder point
           max_level: maxLevel,
           calculatedStatus,
-          trendData: stockHistory
+          trendData: stockHistory,
+          closingQty: csQty,
+          closingVal: csVal,
+          totalIn: tIn,
+          totalOut: tOut
         };
       });
 
@@ -250,8 +287,39 @@ export default function LatestStockTab() {
   async function handleExportCSV() {
     setLoading(true);
     try {
-      const data = await fetchAllRows("latest_stock");
-      let csv = "SKU,Item Name,Unit,Department,Quantity,Stock Value,Price,Avg Daily Consumption,Lead Time (Days),Safety Factor,MOQ,Max Level,Status\n";
+      const [data, csRows, io] = await Promise.all([
+        fetchAllRows("latest_stock"),
+        fetchAllRows("closing_stock", "*"),
+        fetchAllRows("in_out_manual", "*")
+      ]);
+
+      // Map closing stock by SKU
+      const csMap: { [sku: string]: { quantity: number; stock_value: number } } = {};
+      csRows.forEach((row) => {
+        if (row.sku) {
+          csMap[row.sku] = {
+            quantity: (csMap[row.sku]?.quantity || 0) + (Number(row.quantity) || 0),
+            stock_value: (csMap[row.sku]?.stock_value || 0) + (Number(row.stock_value) || 0)
+          };
+        }
+      });
+
+      // Map manual transactions sum by SKU
+      const ioMap: { [sku: string]: { tIn: number; tOut: number } } = {};
+      io.forEach((tx) => {
+        if (tx.sku) {
+          if (!ioMap[tx.sku]) {
+            ioMap[tx.sku] = { tIn: 0, tOut: 0 };
+          }
+          if (tx.in_out === "In") {
+            ioMap[tx.sku].tIn += Number(tx.quantity) || 0;
+          } else if (tx.in_out === "Out") {
+            ioMap[tx.sku].tOut += Number(tx.quantity) || 0;
+          }
+        }
+      });
+
+      let csv = "SKU,Item Name,Unit,Department,Closing Stock Base Qty,Closing Stock Base Value,Manual IN Qty,Manual OUT Qty,Calculated Reserves Qty,Stock Valuation Value,Price,Avg Daily Consumption,Lead Time (Days),Safety Factor,MOQ,Max Level,Status\n";
 
       data.forEach((r) => {
         const qty = Number(r.quantity) || 0;
@@ -262,7 +330,10 @@ export default function LatestStockTab() {
         const maxLevel = Number(r.max_level) || (reorder > 0 ? reorder * 2 : 100);
         const status = getStockStatus(qty, safety, reorder, maxLevel);
 
-        csv += `"${r.sku}","${r.item_name}","${r.unit || ""}","${r.department || ""}",${r.quantity},${r.stock_value},${r.price},${avg},${lead},${safety},${reorder},${maxLevel},"${status.toUpperCase()}"\n`;
+        const closingRow = csMap[r.sku] || { quantity: 0, stock_value: 0 };
+        const ioRow = ioMap[r.sku] || { tIn: 0, tOut: 0 };
+
+        csv += `"${r.sku}","${r.item_name}","${r.unit || ""}","${r.department || ""}",${closingRow.quantity},${closingRow.stock_value},${ioRow.tIn},${ioRow.tOut},${r.quantity},${r.stock_value},${r.price},${avg},${lead},${safety},${reorder},${maxLevel},"${status.toUpperCase()}"\n`;
       });
 
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -472,7 +543,10 @@ export default function LatestStockTab() {
                 <th className="px-6 py-4 text-left">Description</th>
                 <th className="px-6 py-4 text-left">Unit</th>
                 <th className="px-6 py-4 text-left">Department name</th>
-                <th className="px-6 py-4 text-left">Reserves Qty</th>
+                <th className="px-6 py-4 text-left bg-slate-100/50">Closing Stock (Base Qty/Val)</th>
+                <th className="px-6 py-4 text-left bg-emerald-50/30 text-emerald-800">Manual IN (+)</th>
+                <th className="px-6 py-4 text-left bg-rose-50/35 text-rose-800">Manual OUT (-)</th>
+                <th className="px-6 py-4 text-left bg-indigo-50/30 text-indigo-900 border-x border-indigo-100/30 font-black">Latest Stock (Reserves Qty)</th>
                 <th className="px-6 py-4 text-left">Trend (30D)</th>
                 <th className="px-6 py-3.5 text-left">Valuation Value</th>
                 <th className="px-6 py-4 text-left">Average Price</th>
@@ -487,7 +561,7 @@ export default function LatestStockTab() {
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={14} className="py-24 text-center">
+                  <td colSpan={17} className="py-24 text-center">
                     <div className="flex flex-col items-center justify-center gap-3">
                       <div className="w-8 h-8 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin" />
                       <span className="text-xs font-semibold text-slate-400">Loading master stock sheets indexes...</span>
@@ -522,9 +596,29 @@ export default function LatestStockTab() {
                       <td className="px-6 py-3 text-slate-900 font-bold max-w-xs">{item.item_name}</td>
                       <td className="px-6 py-3.5 text-slate-500 whitespace-nowrap">{item.unit}</td>
                       <td className="px-6 py-3.5 text-slate-500 whitespace-nowrap">{item.department}</td>
-                      <td className="px-6 py-3.5 font-extrabold text-slate-800 whitespace-nowrap">
-                        {formatNumber(item.quantity)}
+                      
+                      {/* Closing Stock Base */}
+                      <td className="px-6 py-3.5 whitespace-nowrap bg-slate-50/40 border-r border-slate-100">
+                        <div className="font-bold text-slate-700">{formatNumber(item.closingQty)}</div>
+                        <div className="text-[10px] text-slate-400 font-semibold">{formatCurrency(item.closingVal)}</div>
                       </td>
+
+                      {/* Manual In (+) */}
+                      <td className="px-6 py-3.5 font-bold text-emerald-600 bg-emerald-50/10 whitespace-nowrap">
+                        +{formatNumber(item.totalIn)}
+                      </td>
+
+                      {/* Manual Out (-) */}
+                      <td className="px-6 py-3.5 font-bold text-rose-500 bg-rose-50/15 whitespace-nowrap">
+                        -{formatNumber(item.totalOut)}
+                      </td>
+
+                      {/* Latest Stock Reserves Qty */}
+                      <td className="px-6 py-3.5 font-extrabold text-indigo-750 bg-indigo-50/10 border-x border-indigo-100/20 whitespace-nowrap">
+                        <div>{formatNumber(item.quantity)}</div>
+                        <div className="text-[9px] uppercase text-indigo-500 font-extrabold tracking-wider leading-none mt-0.5">Calculated</div>
+                      </td>
+
                       <td className="px-6 py-3 whitespace-nowrap">
                         <div className="flex items-center h-8 w-24">
                           <LineChart width={100} height={28} data={item.trendData}>
@@ -592,7 +686,7 @@ export default function LatestStockTab() {
                 })
               ) : (
                 <tr>
-                  <td colSpan={14} className="py-24 text-center">
+                  <td colSpan={17} className="py-24 text-center">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <XCircle className="w-10 h-10 text-slate-300" />
                       <span className="text-sm font-bold text-slate-700">Empty Inventory Grid Matches</span>

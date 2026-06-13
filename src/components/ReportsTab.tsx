@@ -232,12 +232,13 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
   }
 
   // Live query for special dynamic database tables
-  async function runInButNotOutReport() {
+  async function runInButNotOutReport(overrideDates?: { start: string; end: string }) {
     setLoading(true);
     try {
+      const activeDates = overrideDates || ibnoDates;
       let q = "?select=*&order=date.asc";
-      if (ibnoDates.start) q += `&date=gte.${ibnoDates.start}`;
-      if (ibnoDates.end) q += `&date=lte.${ibnoDates.end}`;
+      if (activeDates.start) q += `&date=gte.${activeDates.start}`;
+      if (activeDates.end) q += `&date=lte.${activeDates.end}`;
 
       const transactions: Transaction[] = await fetchAllRows("in_out_manual", "*", q);
 
@@ -272,12 +273,13 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
     }
   }
 
-  async function runFrequentlyReorderedReport() {
+  async function runFrequentlyReorderedReport(overrideDates?: { start: string; end: string }) {
     setLoading(true);
     try {
+      const activeDates = overrideDates || froDates;
       let q = "?select=*&in_out=eq.In&order=date.asc";
-      if (froDates.start) q += `&date=gte.${froDates.start}`;
-      if (froDates.end) q += `&date=lte.${froDates.end}`;
+      if (activeDates.start) q += `&date=gte.${activeDates.start}`;
+      if (activeDates.end) q += `&date=lte.${activeDates.end}`;
 
       const transactions: Transaction[] = await fetchAllRows("in_out_manual", "*", q);
 
@@ -633,6 +635,16 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
               setActiveReport("in_but_not_out");
               setReportTitle("In But Not Out Registry");
               setReportSubtitle("Registry filtering items imported to ledger during period range but never issued.");
+              // Set default dates if not already present, then execute immediately
+              const today = new Date().toISOString().split("T")[0];
+              const past = new Date();
+              past.setMonth(past.getMonth() - 1);
+              const lastMonth = past.toISOString().split("T")[0];
+              const dates = ibnoDates.start ? ibnoDates : { start: lastMonth, end: today };
+              if (!ibnoDates.start) {
+                setIbnoDates(dates);
+              }
+              runInButNotOutReport(dates);
             }}
             className="bg-gradient-to-br from-violet-50/40 via-white to-white border border-violet-100 rounded-2xl p-6 hover:shadow-[0_8px_30px_rgba(139,92,246,0.12)] hover:border-violet-300 transition-all cursor-pointer relative group duration-300"
           >
@@ -656,6 +668,16 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
               setActiveReport("frequently_reordered");
               setReportTitle("Frequently Re-Order Items");
               setReportSubtitle("Ranking products ordered on several invoices during dating parameters range.");
+              // Set default dates if not already present, then execute immediately
+              const today = new Date().toISOString().split("T")[0];
+              const past = new Date();
+              past.setMonth(past.getMonth() - 1);
+              const lastMonth = past.toISOString().split("T")[0];
+              const dates = froDates.start ? froDates : { start: lastMonth, end: today };
+              if (!froDates.start) {
+                setFroDates(dates);
+              }
+              runFrequentlyReorderedReport(dates);
             }}
             className="bg-gradient-to-br from-pink-50/40 via-white to-white border border-pink-100 rounded-2xl p-6 hover:shadow-[0_8px_30px_rgba(236,72,153,0.12)] hover:border-pink-300 transition-all cursor-pointer relative group duration-300"
           >
