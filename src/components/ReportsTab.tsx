@@ -23,8 +23,11 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
 
   const [itemNamesList, setItemNamesList] = useState<string[]>([]);
 
-  const [selectedMonth, setSelectedMonth] = useState("");
-  const [selectedDate, setSelectedDate] = useState("");
+  const [selectedMonthStart, setSelectedMonthStart] = useState("2026-04");
+  const [selectedMonthEnd, setSelectedMonthEnd] = useState("2026-06");
+  const [selectedDateStart, setSelectedDateStart] = useState("2026-04-01");
+  const [selectedDateEnd, setSelectedDateEnd] = useState("2026-06-30");
+  const [dateWiseType, setDateWiseType] = useState<"month" | "day">("month");
 
   useEffect(() => {
     // Set default dates
@@ -105,19 +108,55 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
       } else if (type === "zero_value") {
         calculated = ls.filter((item) => Number(item.quantity) > 0 && (!item.stock_value || Number(item.stock_value) === 0));
       } else if (type === "date_wise_stock") {
-        const today = new Date().toISOString().split("T")[0];
-        const defaultMonth = selectedMonth || today.substring(0, 7);
-        if (!selectedMonth) {
-          setSelectedMonth(defaultMonth);
+        let positiveStockItems = ls.filter((item) => Number(item.quantity) > 0);
+        let matchingSkuSet = new Set<string>();
+
+        if (dateWiseType === "day") {
+          let q = `?select=sku,date&in_out=eq.In`;
+          if (selectedDateStart) q += `&date=gte.${selectedDateStart}`;
+          if (selectedDateEnd) q += `&date=lte.${selectedDateEnd}`;
+          
+          const txs: { sku: string; date: string }[] = await fetchAllRows("in_out_manual", "sku,date", q);
+          txs.forEach((tx) => matchingSkuSet.add(tx.sku));
+
+          calculated = positiveStockItems.filter((item) => {
+            if (matchingSkuSet.has(item.sku)) return true;
+            
+            const dStr = (item as any).last_updated || item.updated_at || item.created_at;
+            if (!dStr) return false;
+            const dt = dStr.split("T")[0];
+            
+            const matchesStart = selectedDateStart ? dt >= selectedDateStart : true;
+            const matchesEnd = selectedDateEnd ? dt <= selectedDateEnd : true;
+            return matchesStart && matchesEnd;
+          });
+        } else {
+          let q = `?select=sku,date&in_out=eq.In`;
+          const txs: { sku: string; date: string }[] = await fetchAllRows("in_out_manual", "sku,date", q);
+          
+          txs.forEach((tx) => {
+            if (tx.date) {
+              const txMonth = tx.date.substring(0, 7);
+              const matchesStart = selectedMonthStart ? txMonth >= selectedMonthStart : true;
+              const matchesEnd = selectedMonthEnd ? txMonth <= selectedMonthEnd : true;
+              if (matchesStart && matchesEnd) {
+                matchingSkuSet.add(tx.sku);
+              }
+            }
+          });
+
+          calculated = positiveStockItems.filter((item) => {
+            if (matchingSkuSet.has(item.sku)) return true;
+
+            const dStr = (item as any).last_updated || item.updated_at || item.created_at;
+            if (!dStr) return false;
+            const itemMonth = dStr.substring(0, 7);
+
+            const matchesStart = selectedMonthStart ? itemMonth >= selectedMonthStart : true;
+            const matchesEnd = selectedMonthEnd ? itemMonth <= selectedMonthEnd : true;
+            return matchesStart && matchesEnd;
+          });
         }
-        calculated = ls.filter((item) => Number(item.quantity) > 0).filter((item) => {
-          const dStr = item.updated_at || item.created_at;
-          if (!dStr) return false;
-          if (selectedDate) {
-            return dStr.startsWith(selectedDate);
-          }
-          return dStr.startsWith(defaultMonth);
-        });
       } else if (type === "low_stock") {
         calculated = ls.filter((item) => {
           const qty = Number(item.quantity) || 0;
@@ -256,22 +295,57 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
     setLoading(true);
     try {
       const ls: LatestStockItem[] = await fetchAllRows("latest_stock");
-      
-      let filtered = ls.filter((item) => Number(item.quantity) > 0);
+      let positiveStockItems = ls.filter((item) => Number(item.quantity) > 0);
+      let matchingSkuSet = new Set<string>();
 
-      if (selectedDate) {
-        filtered = filtered.filter((item) => {
-          const dStr = item.updated_at || item.created_at;
-          return dStr ? dStr.startsWith(selectedDate) : false;
+      if (dateWiseType === "day") {
+        let q = `?select=sku,date&in_out=eq.In`;
+        if (selectedDateStart) q += `&date=gte.${selectedDateStart}`;
+        if (selectedDateEnd) q += `&date=lte.${selectedDateEnd}`;
+        
+        const txs: { sku: string; date: string }[] = await fetchAllRows("in_out_manual", "sku,date", q);
+        txs.forEach((tx) => matchingSkuSet.add(tx.sku));
+
+        positiveStockItems = positiveStockItems.filter((item) => {
+          if (matchingSkuSet.has(item.sku)) return true;
+          
+          const dStr = (item as any).last_updated || item.updated_at || item.created_at;
+          if (!dStr) return false;
+          const dt = dStr.split("T")[0];
+          
+          const matchesStart = selectedDateStart ? dt >= selectedDateStart : true;
+          const matchesEnd = selectedDateEnd ? dt <= selectedDateEnd : true;
+          return matchesStart && matchesEnd;
         });
-      } else if (selectedMonth) {
-        filtered = filtered.filter((item) => {
-          const dStr = item.updated_at || item.created_at;
-          return dStr ? dStr.startsWith(selectedMonth) : false;
+      } else {
+        let q = `?select=sku,date&in_out=eq.In`;
+        const txs: { sku: string; date: string }[] = await fetchAllRows("in_out_manual", "sku,date", q);
+        
+        txs.forEach((tx) => {
+          if (tx.date) {
+            const txMonth = tx.date.substring(0, 7);
+            const matchesStart = selectedMonthStart ? txMonth >= selectedMonthStart : true;
+            const matchesEnd = selectedMonthEnd ? txMonth <= selectedMonthEnd : true;
+            if (matchesStart && matchesEnd) {
+              matchingSkuSet.add(tx.sku);
+            }
+          }
+        });
+
+        positiveStockItems = positiveStockItems.filter((item) => {
+          if (matchingSkuSet.has(item.sku)) return true;
+
+          const dStr = (item as any).last_updated || item.updated_at || item.created_at;
+          if (!dStr) return false;
+          const itemMonth = dStr.substring(0, 7);
+
+          const matchesStart = selectedMonthStart ? itemMonth >= selectedMonthStart : true;
+          const matchesEnd = selectedMonthEnd ? itemMonth <= selectedMonthEnd : true;
+          return matchesStart && matchesEnd;
         });
       }
 
-      setReportItems(filtered);
+      setReportItems(positiveStockItems);
     } catch (e: any) {
       alert(`Report processing failed: ${e.message}`);
     } finally {
@@ -308,7 +382,7 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
     } else if (activeReport === "date_wise_stock") {
       csv = "SKU,Item Name,Department,Reserves Quantity,Price,Stock Valuation (₹),Last Updated\n";
       reportItems.forEach((r) => {
-        csv += `"${r.sku}","${r.item_name}","${r.department || ""}",${r.quantity},${r.price},${r.stock_value},"${r.updated_at || r.created_at || ""}"\n`;
+        csv += `"${r.sku}","${r.item_name}","${r.department || ""}",${r.quantity},${r.price},${r.stock_value},"${r.last_updated || r.updated_at || r.created_at || ""}"\n`;
       });
     } else {
       csv = "SKU,Item Name Description,Department,Quantity,Stock Valuation Value (₹)\n";
@@ -531,16 +605,39 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
               setActiveReport("date_wise_stock");
               setReportTitle("Date & Month-Wise Stock Level Report");
               setReportSubtitle("Review active products with positive stock counts at dates or months registration points.");
-              const today = new Date().toISOString().split("T")[0];
-              const defaultMonth = today.substring(0, 7);
-              setSelectedMonth(defaultMonth);
-              setSelectedDate("");
+              
+              const defaultMonthStart = "2026-04";
+              const defaultMonthEnd = "2026-06";
+              
+              setSelectedMonthStart(defaultMonthStart);
+              setSelectedMonthEnd(defaultMonthEnd);
+              setSelectedDateStart("2026-04-01");
+              setSelectedDateEnd("2026-06-30");
+              setDateWiseType("month");
               setLoading(true);
-              fetchAllRows("latest_stock").then((ls) => {
-                const filtered = ls.filter((item) => Number(item.quantity) > 0).filter((item) => {
-                  const dStr = item.updated_at || item.created_at;
-                  return dStr ? dStr.startsWith(defaultMonth) : false;
+
+              Promise.all([
+                fetchAllRows("latest_stock"),
+                fetchAllRows("in_out_manual", "sku,date", `?select=sku,date&in_out=eq.In`)
+              ]).then(([ls, txs]) => {
+                const matchingSkuSet = new Set<string>();
+                txs.forEach((tx) => {
+                  if (tx.date) {
+                    const txMonth = tx.date.substring(0, 7);
+                    if (txMonth >= defaultMonthStart && txMonth <= defaultMonthEnd) {
+                      matchingSkuSet.add(tx.sku);
+                    }
+                  }
                 });
+
+                const filtered = ls.filter((item) => Number(item.quantity) > 0).filter((item) => {
+                  if (matchingSkuSet.has(item.sku)) return true;
+                  const dStr = (item as any).last_updated || item.updated_at || item.created_at;
+                  if (!dStr) return false;
+                  const itemMonth = dStr.substring(0, 7);
+                  return itemMonth >= defaultMonthStart && itemMonth <= defaultMonthEnd;
+                });
+
                 setReportItems(filtered);
                 setLoading(false);
               }).catch(() => setLoading(false));
@@ -662,44 +759,101 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
           )}
 
           {activeReport === "date_wise_stock" && (
-            <div className="p-6 border-b border-slate-100 bg-indigo-50/20 flex flex-col md:flex-row md:items-end gap-4">
-              <div className="w-full md:w-1/3">
-                <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1.5">
-                  Filter by Month
-                </label>
-                <input
-                  type="month"
-                  value={selectedMonth}
-                  onChange={(e) => {
-                    setSelectedMonth(e.target.value);
-                    setSelectedDate("");
-                  }}
-                  className="w-full text-xs font-semibold border border-slate-200 rounded-xl px-3.5 py-2 outline-none focus:ring-2 focus:ring-indigo-500 bg-white cursor-pointer"
-                />
+            <div className="p-6 border-b border-slate-100 bg-indigo-50/20 flex flex-col gap-5">
+              {/* Filter Method Segmented Control */}
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDateWiseType("month");
+                    }}
+                    className={`px-4 py-2 text-xs font-bold rounded-lg transition-all ${
+                      dateWiseType === "month"
+                        ? "bg-white text-indigo-700 shadow-sm"
+                        : "text-slate-550 hover:text-slate-800"
+                    }`}
+                  >
+                    Filter by Month Range
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDateWiseType("day");
+                    }}
+                    className={`px-4 py-2 text-xs font-bold rounded-lg transition-all ${
+                      dateWiseType === "day"
+                        ? "bg-white text-indigo-700 shadow-sm"
+                        : "text-slate-550 hover:text-slate-800"
+                    }`}
+                  >
+                    Filter by Specific Days
+                  </button>
+                </div>
+                
+                <button
+                  onClick={runDateWiseStockReport}
+                  className="px-5 py-2.5 bg-indigo-650 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm"
+                >
+                  <Calendar className="w-4 h-4" />
+                  Refresh Date Wise Report
+                </button>
               </div>
 
-              <div className="w-full md:w-1/3">
-                <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1.5">
-                  Filter by Specific Day
-                </label>
-                <input
-                  type="date"
-                  value={selectedDate}
-                  onChange={(e) => {
-                    setSelectedDate(e.target.value);
-                    setSelectedMonth("");
-                  }}
-                  className="w-full text-xs font-semibold border border-slate-200 rounded-xl px-3.5 py-2 outline-none focus:ring-2 focus:ring-indigo-500 bg-white cursor-pointer"
-                />
+              {/* Range Inputs based on choice */}
+              <div className="flex flex-col md:flex-row gap-4">
+                {dateWiseType === "month" ? (
+                  <>
+                    <div className="w-full md:w-1/2">
+                      <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1.5">
+                        Start Month
+                      </label>
+                      <input
+                        type="month"
+                        value={selectedMonthStart}
+                        onChange={(e) => setSelectedMonthStart(e.target.value)}
+                        className="w-full text-xs font-semibold border border-slate-200 rounded-xl px-3.5 py-2 outline-none focus:ring-2 focus:ring-indigo-500 bg-white cursor-pointer"
+                      />
+                    </div>
+                    <div className="w-full md:w-1/2">
+                      <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1.5">
+                        End Month
+                      </label>
+                      <input
+                        type="month"
+                        value={selectedMonthEnd}
+                        onChange={(e) => setSelectedMonthEnd(e.target.value)}
+                        className="w-full text-xs font-semibold border border-slate-200 rounded-xl px-3.5 py-2 outline-none focus:ring-2 focus:ring-indigo-500 bg-white cursor-pointer"
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="w-full md:w-1/2">
+                      <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1.5">
+                        Start Date
+                      </label>
+                      <input
+                        type="date"
+                        value={selectedDateStart}
+                        onChange={(e) => setSelectedDateStart(e.target.value)}
+                        className="w-full text-xs font-semibold border border-slate-200 rounded-xl px-3.5 py-2 outline-none focus:ring-2 focus:ring-indigo-500 bg-white cursor-pointer"
+                      />
+                    </div>
+                    <div className="w-full md:w-1/2">
+                      <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1.5">
+                        End Date
+                      </label>
+                      <input
+                        type="date"
+                        value={selectedDateEnd}
+                        onChange={(e) => setSelectedDateEnd(e.target.value)}
+                        className="w-full text-xs font-semibold border border-slate-200 rounded-xl px-3.5 py-2 outline-none focus:ring-2 focus:ring-indigo-500 bg-white cursor-pointer"
+                      />
+                    </div>
+                  </>
+                )}
               </div>
-
-              <button
-                onClick={runDateWiseStockReport}
-                className="px-5 py-2.5 bg-indigo-650 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
-              >
-                <Calendar className="w-4 h-4" />
-                Refresh Date Wise Report
-              </button>
             </div>
           )}
 
@@ -738,7 +892,7 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
                         <td className="px-6 py-4 font-bold text-slate-600">{formatCurrency(item.price)}</td>
                         <td className="px-6 py-4 font-black text-slate-950">{formatCurrency(item.stock_value)}</td>
                         <td className="px-6 py-4 text-right text-xs text-slate-400 font-semibold font-mono whitespace-nowrap">
-                          {formatDateTime(item.updated_at || item.created_at)}
+                          {formatDateTime(item.last_updated || item.updated_at || item.created_at)}
                         </td>
                       </tr>
                     ))
