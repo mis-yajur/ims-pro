@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from "react";
 import { fetchAllRows, sbGet, formatCurrency, formatNumber, formatDate, formatDateTime } from "../utils/supabase";
 import { LatestStockItem, Transaction, DepartmentValuation } from "../types";
-import { AlertCircle, ArrowLeft, Ban, Bolt, Building2, Calendar, FileOutput, HelpCircle, History, Hammer, TrendingUp, AlertTriangle } from "lucide-react";
+import { 
+  AlertCircle, ArrowLeft, Ban, Bolt, Building2, Calendar, FileOutput, HelpCircle, 
+  History, Hammer, TrendingUp, AlertTriangle, Download, Search, ArrowUpDown, 
+  Tag, Layers, ListFilter, PackageOpen, CheckCircle2 
+} from "lucide-react";
 
 interface ReportsTabProps {
   quickRunType?: string | null;
@@ -28,6 +32,18 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
   const [selectedDateStart, setSelectedDateStart] = useState("2026-04-01");
   const [selectedDateEnd, setSelectedDateEnd] = useState("2026-06-30");
   const [dateWiseType, setDateWiseType] = useState<"month" | "day">("month");
+
+  // Glitch fix: Add searchable and sortable options on compiling
+  const [reportSearchQuery, setReportSearchQuery] = useState("");
+  const [sortField, setSortField] = useState<string | null>(null);
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+
+  // Clear query and sort params when switching reports
+  useEffect(() => {
+    setReportSearchQuery("");
+    setSortField(null);
+    setSortOrder("desc");
+  }, [activeReport]);
 
   useEffect(() => {
     // Set default dates
@@ -354,7 +370,7 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
   }
 
   function handleExport() {
-    if (reportItems.length === 0) {
+    if (sortedAndFilteredItems.length === 0) {
       alert("No data available to compile.");
       return;
     }
@@ -363,30 +379,30 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
     const ds = new Date().toISOString().split("T")[0];
 
     if (activeReport === "dept_value") {
-      const total = reportItems.reduce((sum, r) => sum + (r.stock_value || 0), 0);
+      const total = sortedAndFilteredItems.reduce((sum, r) => sum + (r.stock_value || 0), 0);
       csv = "Department,Valuation Value (₹),Valuation Percentage (%)\n";
-      reportItems.forEach((r) => {
-        const pct = total > 0 ? ((r.stock_value / total) * 100).toFixed(2) : "0.00";
+      sortedAndFilteredItems.forEach((r) => {
+        const pct = total > 0 ? ((r.stock_value / total) * 105 / 105 * 100).toFixed(2) : "0.00";
         csv += `"${r.department}",${r.stock_value},${pct}%\n`;
       });
     } else if (activeReport === "in_but_not_out") {
       csv = "Timestamp,SKU,Type,Date Received,Total Received In Qty,Item Description,Stock Value,Department\n";
-      reportItems.forEach((r) => {
+      sortedAndFilteredItems.forEach((r) => {
         csv += `"${r.timestamp}","${r.sku}","IN","${r.date}",${r.quantity},"${r.item_name}",${r.stock_value},"${r.department || ""}"\n`;
       });
     } else if (activeReport === "frequently_reordered") {
       csv = "Timestamp,SKU,In/Out,Date Ordered,Quantity,Item Description,Transaction Value,Department,Rank Orders Count\n";
-      reportItems.forEach((r) => {
+      sortedAndFilteredItems.forEach((r) => {
         csv += `"${r.timestamp}","${r.sku}","${r.in_out}","${r.date}",${r.quantity},"${r.item_name}",${r.stock_value},"${r.department || ""}",${r.frequency}\n`;
       });
     } else if (activeReport === "date_wise_stock") {
       csv = "SKU,Item Name,Department,Reserves Quantity,Price,Stock Valuation (₹),Last Updated\n";
-      reportItems.forEach((r) => {
+      sortedAndFilteredItems.forEach((r) => {
         csv += `"${r.sku}","${r.item_name}","${r.department || ""}",${r.quantity},${r.price},${r.stock_value},"${r.last_updated || r.updated_at || r.created_at || ""}"\n`;
       });
     } else {
       csv = "SKU,Item Name Description,Department,Quantity,Stock Valuation Value (₹)\n";
-      reportItems.forEach((r) => {
+      sortedAndFilteredItems.forEach((r) => {
         csv += `"${r.sku}","${r.item_name}","${r.department || ""}",${r.quantity},${r.stock_value}\n`;
       });
     }
@@ -404,6 +420,64 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
     setActiveReport(null);
     setReportItems([]);
   }
+
+  const toggleSort = (field: string) => {
+    if (sortField === field) {
+      setSortOrder(prev => prev === "asc" ? "desc" : "asc");
+    } else {
+      setSortField(field);
+      setSortOrder("desc");
+    }
+  };
+
+  const renderSortableHeader = (label: string, field: string, textRight = false) => {
+    const isSorted = sortField === field;
+    return (
+      <th 
+        onClick={() => toggleSort(field)}
+        className={`px-6 py-4 cursor-pointer hover:bg-slate-100/70 transition-colors group select-none ${textRight ? "text-right" : "text-left"}`}
+      >
+        <div className={`flex items-center gap-1.5 ${textRight ? "justify-end" : ""}`}>
+          <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 group-hover:text-slate-700">{label}</span>
+          <ArrowUpDown className={`w-3.5 h-3.5 transition-all ${isSorted ? "text-indigo-650 scale-105 opacity-100" : "text-slate-300 opacity-40 group-hover:opacity-80"}`} />
+        </div>
+      </th>
+    );
+  };
+
+  // Real-time calculated subsets with search & sorting
+  const filteredItems = reportItems.filter((item) => {
+    if (!reportSearchQuery) return true;
+    const query = reportSearchQuery.toLowerCase();
+    const skuMatch = (item.sku || "").toLowerCase().includes(query);
+    const nameMatch = (item.item_name || "").toLowerCase().includes(query);
+    const deptMatch = (item.department || "").toLowerCase().includes(query);
+    return skuMatch || nameMatch || deptMatch;
+  });
+
+  const sortedAndFilteredItems = [...filteredItems].sort((a, b) => {
+    if (!sortField) return 0;
+    
+    let valA = a[sortField];
+    let valB = b[sortField];
+    
+    if (sortField === "last_updated") {
+      valA = a.last_updated || a.updated_at || a.created_at || "";
+      valB = b.last_updated || b.updated_at || b.created_at || "";
+    }
+    
+    if (typeof valA === "number" && typeof valB === "number") {
+      return sortOrder === "asc" ? valA - valB : valB - valA;
+    }
+    
+    return sortOrder === "asc"
+      ? String(valA || "").localeCompare(String(valB || ""))
+      : String(valB || "").localeCompare(String(valA || ""));
+  });
+
+  const liveRecordsCount = filteredItems.length;
+  const liveQtySum = filteredItems.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
+  const liveValueSum = filteredItems.reduce((sum, r) => sum + (Number(r.stock_value) || 0), 0);
 
   return (
     <div className="space-y-6 animate-fadeIn pb-12">
@@ -423,17 +497,17 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
           {/* 1: Negative Stock */}
           <div
             onClick={() => runReport("negative_stock")}
-            className="bg-white border border-slate-200 rounded-2xl p-6 hover:border-indigo-500 hover:shadow-md transition-all cursor-pointer relative group"
+            className="bg-gradient-to-br from-rose-50/40 via-white to-white border border-rose-100 rounded-2xl p-6 hover:shadow-[0_8px_30px_rgba(244,63,94,0.12)] hover:border-rose-300 transition-all cursor-pointer relative group duration-300"
           >
             <div className="flex items-start justify-between">
-              <span className="p-3 bg-rose-50 text-rose-600 rounded-xl group-hover:scale-105 transition-transform">
+              <span className="p-3 bg-rose-100 text-rose-600 rounded-xl group-hover:scale-105 transition-transform duration-300 shadow-sm">
                 <AlertTriangle className="w-6 h-6 border-transparent" />
               </span>
-              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-rose-50 text-rose-700 uppercase tracking-widest border border-rose-100">
-                Critical
+              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-rose-100 text-rose-700 uppercase tracking-widest border border-rose-200">
+                Critical Alert
               </span>
             </div>
-            <h3 className="text-lg font-bold text-slate-900 mt-5">Negative Stock Ledger</h3>
+            <h3 className="text-lg font-bold text-rose-950 mt-5 group-hover:text-rose-600 transition-colors">Negative Stock Ledger</h3>
             <p className="text-xs text-slate-500 mt-2 leading-relaxed">
               Find items registered with negative warehouse reserves quantities or values.
             </p>
@@ -442,17 +516,17 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
           {/* 2: High Value */}
           <div
             onClick={() => runReport("high_value")}
-            className="bg-white border border-slate-200 rounded-2xl p-6 hover:border-indigo-500 hover:shadow-md transition-all cursor-pointer relative group"
+            className="bg-gradient-to-br from-indigo-50/40 via-white to-white border border-indigo-100 rounded-2xl p-6 hover:shadow-[0_8px_30px_rgba(99,102,241,0.12)] hover:border-indigo-300 transition-all cursor-pointer relative group duration-300"
           >
             <div className="flex items-start justify-between">
-              <span className="p-3 bg-indigo-50 text-indigo-600 rounded-xl group-hover:scale-105 transition-transform">
+              <span className="p-3 bg-indigo-100 text-indigo-600 rounded-xl group-hover:scale-105 transition-transform duration-300 shadow-sm">
                 <TrendingUp className="w-6 h-6" />
               </span>
-              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-indigo-50 text-indigo-700 uppercase tracking-widest border border-indigo-100">
-                Performance
+              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-indigo-100 text-indigo-700 uppercase tracking-widest border border-indigo-200">
+                Auditing
               </span>
             </div>
-            <h3 className="text-lg font-bold text-slate-900 mt-5">High Value Items (Top 50)</h3>
+            <h3 className="text-lg font-bold text-indigo-950 mt-5 group-hover:text-indigo-600 transition-colors">High Value Items (Top 50)</h3>
             <p className="text-xs text-slate-500 mt-2 leading-relaxed">
               Ranking top 50 inventory descriptions representing the highest capital values.
             </p>
@@ -461,17 +535,17 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
           {/* 3: Zero Value */}
           <div
             onClick={() => runReport("zero_value")}
-            className="bg-white border border-slate-200 rounded-2xl p-6 hover:border-indigo-500 hover:shadow-md transition-all cursor-pointer relative group"
+            className="bg-gradient-to-br from-amber-50/20 via-white to-white border border-amber-100 rounded-2xl p-6 hover:shadow-[0_8px_30px_rgba(245,158,11,0.08)] hover:border-amber-300 transition-all cursor-pointer relative group duration-300"
           >
             <div className="flex items-start justify-between">
-              <span className="p-3 bg-slate-50 text-slate-700 rounded-xl group-hover:scale-105 transition-transform">
+              <span className="p-3 bg-amber-100 text-amber-700 rounded-xl group-hover:scale-105 transition-transform duration-300 shadow-sm">
                 <Ban className="w-6 h-6" />
               </span>
-              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-slate-100 text-slate-600 uppercase tracking-widest border border-slate-200">
-                Attention
+              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-amber-100 text-amber-700 uppercase tracking-widest border border-amber-200">
+                Discrepancy
               </span>
             </div>
-            <h3 className="text-lg font-bold text-slate-900 mt-5">Zero Value Items</h3>
+            <h3 className="text-lg font-bold text-amber-950 mt-5 group-hover:text-amber-700 transition-colors">Zero Value Items</h3>
             <p className="text-xs text-slate-500 mt-2 leading-relaxed">
               Track items containing positive physical counts but holding null valuation parameters.
             </p>
@@ -480,17 +554,17 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
           {/* 4: Dept Valuation */}
           <div
             onClick={() => runReport("dept_value")}
-            className="bg-white border border-slate-200 rounded-2xl p-6 hover:border-indigo-500 hover:shadow-md transition-all cursor-pointer relative group"
+            className="bg-gradient-to-br from-teal-50/40 via-white to-white border border-teal-100 rounded-2xl p-6 hover:shadow-[0_8px_30px_rgba(20,184,166,0.1)] hover:border-teal-300 transition-all cursor-pointer relative group duration-300"
           >
             <div className="flex items-start justify-between">
-              <span className="p-3 bg-teal-50 text-teal-600 rounded-xl group-hover:scale-105 transition-transform">
+              <span className="p-3 bg-teal-100 text-teal-600 rounded-xl group-hover:scale-105 transition-transform duration-300 shadow-sm">
                 <Building2 className="w-6 h-6" />
               </span>
-              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-teal-50 text-teal-700 uppercase tracking-widest border border-teal-100">
-                Divisions
+              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-teal-100 text-teal-700 uppercase tracking-widest border border-teal-200">
+                Allocation
               </span>
             </div>
-            <h3 className="text-lg font-bold text-slate-900 mt-5">Department Valuation</h3>
+            <h3 className="text-lg font-bold text-teal-950 mt-5 group-hover:text-teal-600 transition-colors">Department Valuation</h3>
             <p className="text-xs text-slate-500 mt-2 leading-relaxed">
               Explore aggregate stock assets investments distributed department-wise.
             </p>
@@ -499,17 +573,17 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
           {/* 5: Electrical */}
           <div
             onClick={() => runReport("electrical")}
-            className="bg-white border border-slate-200 rounded-2xl p-6 hover:border-indigo-500 hover:shadow-md transition-all cursor-pointer relative group"
+            className="bg-gradient-to-br from-yellow-50/40 via-white to-white border border-yellow-100 rounded-2xl p-6 hover:shadow-[0_8px_30px_rgba(234,179,8,0.1)] hover:border-yellow-300 transition-all cursor-pointer relative group duration-300"
           >
             <div className="flex items-start justify-between">
-              <span className="p-3 bg-amber-50 text-amber-500 rounded-xl group-hover:scale-105 transition-transform">
-                <Bolt className="w-6 h-6" />
+              <span className="p-3 bg-yellow-100 text-yellow-600 rounded-xl group-hover:scale-105 transition-transform duration-300 shadow-sm">
+                <Bolt className="w-6 h-6 animate-pulse" />
               </span>
-              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-amber-50 text-amber-700 uppercase tracking-widest border border-amber-100">
-                Category
+              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-yellow-100 text-yellow-800 uppercase tracking-widest border border-yellow-200">
+                Segmented
               </span>
             </div>
-            <h3 className="text-lg font-bold text-slate-900 mt-5">Electrical Registry</h3>
+            <h3 className="text-lg font-bold text-yellow-950 mt-5 group-hover:text-yellow-600 transition-colors">Electrical Registry</h3>
             <p className="text-xs text-slate-500 mt-2 leading-relaxed">
               Automatic scanning targeting wire lines, bulbs, switches and electrical spares.
             </p>
@@ -518,17 +592,17 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
           {/* 6: Machinery spares */}
           <div
             onClick={() => runReport("machinery")}
-            className="bg-white border border-slate-200 rounded-2xl p-6 hover:border-indigo-500 hover:shadow-md transition-all cursor-pointer relative group"
+            className="bg-gradient-to-br from-cyan-50/40 via-white to-white border border-cyan-100 rounded-2xl p-6 hover:shadow-[0_8px_30px_rgba(6,182,212,0.1)] hover:border-cyan-300 transition-all cursor-pointer relative group duration-300"
           >
             <div className="flex items-start justify-between">
-              <span className="p-3 bg-indigo-50 text-indigo-500 rounded-xl group-hover:scale-105 transition-transform">
+              <span className="p-3 bg-cyan-100 text-cyan-600 rounded-xl group-hover:scale-105 transition-transform duration-300 shadow-sm">
                 <Hammer className="w-6 h-6 animate-none" />
               </span>
-              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-indigo-50 text-indigo-700 uppercase tracking-widest border border-indigo-100">
-                Category
+              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-cyan-100 text-cyan-700 uppercase tracking-widest border border-cyan-200">
+                Spares Parts
               </span>
             </div>
-            <h3 className="text-lg font-bold text-slate-900 mt-5">Machinery Spares</h3>
+            <h3 className="text-lg font-bold text-cyan-950 mt-5 group-hover:text-cyan-600 transition-colors">Machinery Spares</h3>
             <p className="text-xs text-slate-500 mt-2 leading-relaxed">
               Filtered inventory snapshot of valves, pumps, gear wheels and backup elements.
             </p>
@@ -537,17 +611,17 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
           {/* 7: Low Stock */}
           <div
             onClick={() => runReport("low_stock")}
-            className="bg-white border border-slate-200 rounded-2xl p-6 hover:border-indigo-500 hover:shadow-md transition-all cursor-pointer relative group"
+            className="bg-gradient-to-br from-orange-50/40 via-white to-white border border-orange-100 rounded-2xl p-6 hover:shadow-[0_8px_30px_rgba(249,115,22,0.12)] hover:border-orange-300 transition-all cursor-pointer relative group duration-300"
           >
             <div className="flex items-start justify-between">
-              <span className="p-3 bg-orange-50 text-orange-600 rounded-xl group-hover:scale-105 transition-transform">
+              <span className="p-3 bg-orange-100 text-orange-600 rounded-xl group-hover:scale-105 transition-transform duration-300 shadow-sm">
                 <AlertCircle className="w-6 h-6 border-transparent" />
               </span>
-              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-orange-50 text-orange-700 uppercase tracking-widest border border-orange-100">
-                Fewer Alert
+              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-orange-100 text-orange-700 uppercase tracking-widest border border-orange-200">
+                Running Low
               </span>
             </div>
-            <h3 className="text-lg font-bold text-slate-900 mt-5">Low Stock Alert</h3>
+            <h3 className="text-lg font-bold text-orange-950 mt-5 group-hover:text-orange-600 transition-colors">Low Stock Alert</h3>
             <p className="text-xs text-slate-500 mt-2 leading-relaxed">
               Examine live instances currently matching low reserves level (under 20% max capacity).
             </p>
@@ -560,17 +634,17 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
               setReportTitle("In But Not Out Registry");
               setReportSubtitle("Registry filtering items imported to ledger during period range but never issued.");
             }}
-            className="bg-white border border-slate-200 rounded-2xl p-6 hover:border-indigo-500 hover:shadow-md transition-all cursor-pointer relative group"
+            className="bg-gradient-to-br from-violet-50/40 via-white to-white border border-violet-100 rounded-2xl p-6 hover:shadow-[0_8px_30px_rgba(139,92,246,0.12)] hover:border-violet-300 transition-all cursor-pointer relative group duration-300"
           >
             <div className="flex items-start justify-between">
-              <span className="p-3 bg-violet-50 text-violet-600 rounded-xl group-hover:scale-105 transition-transform">
+              <span className="p-3 bg-violet-100 text-violet-600 rounded-xl group-hover:scale-105 transition-transform duration-300 shadow-sm">
                 <Calendar className="w-6 h-6" />
               </span>
-              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-violet-50 text-violet-700 uppercase tracking-widest border border-violet-100">
-                Date Flow
+              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-violet-100 text-violet-700 uppercase tracking-widest border border-violet-200">
+                Stock Activity
               </span>
             </div>
-            <h3 className="text-lg font-bold text-slate-900 mt-5">In But Not Out</h3>
+            <h3 className="text-lg font-bold text-violet-950 mt-5 group-hover:text-violet-600 transition-colors">In But Not Out</h3>
             <p className="text-xs text-slate-500 mt-2 leading-relaxed">
               Find and isolate dormant imports sitting in warehouse stores during selected range.
             </p>
@@ -583,17 +657,17 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
               setReportTitle("Frequently Re-Order Items");
               setReportSubtitle("Ranking products ordered on several invoices during dating parameters range.");
             }}
-            className="bg-white border border-slate-200 rounded-2xl p-6 hover:border-indigo-500 hover:shadow-md transition-all cursor-pointer relative group"
+            className="bg-gradient-to-br from-pink-50/40 via-white to-white border border-pink-100 rounded-2xl p-6 hover:shadow-[0_8px_30px_rgba(236,72,153,0.12)] hover:border-pink-300 transition-all cursor-pointer relative group duration-300"
           >
             <div className="flex items-start justify-between">
-              <span className="p-3 bg-rose-50 text-rose-500 rounded-xl group-hover:scale-105 transition-transform">
+              <span className="p-3 bg-pink-100 text-pink-600 rounded-xl group-hover:scale-105 transition-transform duration-300 shadow-sm">
                 <History className="w-6 h-6 bg-transparent" />
               </span>
-              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-rose-50 text-rose-700 uppercase tracking-widest border border-rose-100">
-                Ordering
+              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-pink-100 text-pink-700 uppercase tracking-widest border border-pink-200">
+                Fast Velocity
               </span>
             </div>
-            <h3 className="text-lg font-bold text-slate-900 mt-5">Frequently Re-Order</h3>
+            <h3 className="text-lg font-bold text-pink-950 mt-5 group-hover:text-pink-600 transition-colors">Frequently Re-Order</h3>
             <p className="text-xs text-slate-500 mt-2 leading-relaxed">
               Review and audit fast-reordered components within warehouse dating records.
             </p>
@@ -642,17 +716,17 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
                 setLoading(false);
               }).catch(() => setLoading(false));
             }}
-            className="bg-white border border-slate-200 rounded-2xl p-6 hover:border-indigo-500 hover:shadow-md transition-all cursor-pointer relative group"
+            className="bg-gradient-to-br from-emerald-50/50 via-white to-white border border-emerald-100 rounded-2xl p-6 hover:shadow-[0_8px_30px_rgba(16,185,129,0.15)] hover:border-emerald-300 transition-all cursor-pointer relative group duration-300"
           >
             <div className="flex items-start justify-between">
-              <span className="p-3 bg-emerald-50 text-emerald-650 rounded-xl group-hover:scale-105 transition-transform">
-                <Calendar className="w-6 h-6" />
+              <span className="p-3 bg-emerald-100 text-emerald-700 rounded-xl group-hover:scale-105 transition-transform duration-300 shadow-sm">
+                <Calendar className="w-6 h-6 animate-none" />
               </span>
-              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-emerald-50 text-emerald-700 uppercase tracking-widest border border-emerald-100">
-                Date Wise
+              <span className="px-2.5 py-1 text-[10px] font-extrabold rounded-full bg-emerald-100 text-emerald-800 uppercase tracking-widest border border-emerald-200">
+                Timeline Report
               </span>
             </div>
-            <h3 className="text-lg font-bold text-slate-900 mt-5">Date Wise Stock Report</h3>
+            <h3 className="text-lg font-bold text-slate-900 mt-5 group-hover:text-emerald-700 transition-colors">Date Wise Stock Report</h3>
             <p className="text-xs text-slate-500 mt-2 leading-relaxed">
               Analyze incoming products holding positive stock coming from the latest stock sheets, filtered by date or month.
             </p>
@@ -791,13 +865,23 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
                   </button>
                 </div>
                 
-                <button
-                  onClick={runDateWiseStockReport}
-                  className="px-5 py-2.5 bg-indigo-650 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm"
-                >
-                  <Calendar className="w-4 h-4" />
-                  Refresh Date Wise Report
-                </button>
+                <div className="flex flex-wrap gap-2.5">
+                  <button
+                    onClick={runDateWiseStockReport}
+                    className="px-5 py-2.5 bg-indigo-650 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm"
+                  >
+                    <Calendar className="w-4 h-4" />
+                    Refresh Date Wise Report
+                  </button>
+                  <button
+                    onClick={handleExport}
+                    className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm"
+                    title="Export current compiled and filtered list directly to a CSV document file"
+                  >
+                    <Download className="w-4 h-4" />
+                    Download CSV Report
+                  </button>
+                </div>
               </div>
 
               {/* Range Inputs based on choice */}
@@ -857,6 +941,75 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
             </div>
           )}
 
+          {/* SEARCH BAR & DYNAMIC STATS PANEL */}
+          {!loading && reportItems.length > 0 && (
+            <div className="p-6 border-b border-slate-100 bg-slate-50/50 space-y-6">
+              {/* Real-time search query input to fix gaps/glitches */}
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Real-time filter: Type SKU, Item Name description or department to filter compiled results..."
+                  value={reportSearchQuery}
+                  onChange={(e) => setReportSearchQuery(e.target.value)}
+                  className="w-full pl-11 pr-10 py-3 text-sm font-semibold border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 bg-white shadow-xs transition-all"
+                />
+                {reportSearchQuery && (
+                  <button
+                    onClick={() => {
+                      setReportSearchQuery("");
+                    }}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-slate-150 text-slate-400 text-xs hover:bg-slate-200 hover:text-slate-600 transition-colors flex items-center justify-center font-black cursor-pointer"
+                    title="Clear filter text"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+
+              {/* Colorful Metrics Summary Row (Sums & Valuation Counts) */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {/* 1. Matches Items Card */}
+                <div className="bg-gradient-to-br from-indigo-500/10 to-indigo-500/[0.02] border border-indigo-150/60 rounded-2xl p-4 flex items-center gap-4 shadow-xs">
+                  <div className="p-3 bg-indigo-500/15 text-indigo-700 rounded-xl">
+                    <Layers className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <span className="block text-[10px] font-extrabold uppercase text-indigo-650 tracking-wider">Matched Lines</span>
+                    <span className="text-xl font-extrabold text-indigo-900">{formatNumber(liveRecordsCount)}</span>
+                    <span className="text-[10px] text-slate-400 font-bold block">matched criteria</span>
+                  </div>
+                </div>
+
+                {/* 2. Reserves Qty Sum Card */}
+                {activeReport !== "dept_value" && (
+                  <div className="bg-gradient-to-br from-emerald-500/10 to-emerald-500/[0.02] border border-emerald-200/50 rounded-2xl p-4 flex items-center gap-4 shadow-xs">
+                    <div className="p-3 bg-emerald-500/15 text-emerald-700 rounded-xl">
+                      <PackageOpen className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <span className="block text-[10px] font-extrabold uppercase text-emerald-650 tracking-wider">Total Reserves Qty</span>
+                      <span className="text-xl font-black text-emerald-900">{formatNumber(liveQtySum)}</span>
+                      <span className="text-[10px] text-slate-400 font-bold block">summed physical units</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. Valuation Sum Card */}
+                <div className="bg-gradient-to-br from-amber-500/10 to-amber-500/[0.02] border border-amber-200/60 rounded-2xl p-4 flex items-center gap-4 shadow-xs">
+                  <div className="p-3 bg-amber-500/15 text-amber-700 rounded-xl">
+                    <Tag className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <span className="block text-[10px] font-extrabold uppercase text-amber-650 tracking-wider">Stock Valuation</span>
+                    <span className="text-xl font-black text-amber-950">{formatCurrency(liveValueSum)}</span>
+                    <span className="text-[10px] text-slate-400 font-bold block">capital reserves value</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Grid View table */}
           <div className="overflow-x-auto">
             {loading ? (
@@ -870,32 +1023,48 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
               <table className="w-full text-slate-650 text-sm">
                 <thead className="bg-slate-50 text-[10px] uppercase font-bold tracking-wider text-slate-400 border-b border-slate-100">
                   <tr>
-                    <th className="px-6 py-4 text-left">SKU</th>
-                    <th className="px-6 py-4 text-left">Item Name Description</th>
-                    <th className="px-6 py-4 text-left">Department Division</th>
-                    <th className="px-6 py-4 text-left">Reserves Qty</th>
-                    <th className="px-6 py-4 text-left">Unit Price</th>
-                    <th className="px-6 py-4 text-left">Stock Valuation (₹)</th>
-                    <th className="px-6 py-4 text-right">Last Updated Point</th>
+                    {renderSortableHeader("SKU", "sku")}
+                    {renderSortableHeader("Item Name Description", "item_name")}
+                    {renderSortableHeader("Department Division", "department")}
+                    {renderSortableHeader("Reserves Qty", "quantity")}
+                    {renderSortableHeader("Unit Price", "price")}
+                    {renderSortableHeader("Stock Valuation (₹)", "stock_value")}
+                    {renderSortableHeader("Last Updated Point", "last_updated", true)}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {reportItems.length > 0 ? (
-                    reportItems.map((item, i) => (
-                      <tr key={i} className="hover:bg-slate-50/60 transition-colors font-medium">
-                        <td className="px-6 py-4 text-slate-900 font-bold whitespace-nowrap">{item.sku}</td>
-                        <td className="px-6 py-4 font-bold text-slate-900">{item.item_name}</td>
-                        <td className="px-6 py-4 text-slate-500 font-semibold">{item.department}</td>
-                        <td className="px-6 py-4 font-extrabold text-slate-850">
-                          {formatNumber(item.quantity)} <span className="text-[10px] font-bold text-slate-400">{item.unit || "pcs"}</span>
+                  {sortedAndFilteredItems.length > 0 ? (
+                    <>
+                      {sortedAndFilteredItems.map((item, i) => (
+                        <tr key={i} className="hover:bg-slate-50/60 transition-colors font-medium">
+                          <td className="px-6 py-4 text-slate-900 font-bold whitespace-nowrap">{item.sku}</td>
+                          <td className="px-6 py-4 font-bold text-slate-900">{item.item_name}</td>
+                          <td className="px-6 py-4 text-slate-500 font-semibold">{item.department}</td>
+                          <td className="px-6 py-4 font-extrabold text-slate-850">
+                            {formatNumber(item.quantity)} <span className="text-[10px] font-bold text-slate-400">{item.unit || "pcs"}</span>
+                          </td>
+                          <td className="px-6 py-4 font-bold text-slate-650">{formatCurrency(item.price)}</td>
+                          <td className="px-6 py-4 font-black text-slate-950">{formatCurrency(item.stock_value)}</td>
+                          <td className="px-6 py-4 text-right text-xs text-slate-400 font-semibold font-mono whitespace-nowrap">
+                            {formatDateTime(item.last_updated || item.updated_at || item.created_at)}
+                          </td>
+                        </tr>
+                      ))}
+                      {/* Highlighted Footer Summary Row for date_wise_stock */}
+                      <tr className="bg-indigo-50/30 font-extrabold border-t-2 border-indigo-100/80">
+                        <td colSpan={3} className="px-6 py-4 text-slate-700 text-xs uppercase tracking-wider font-extrabold text-right">Summed Total:</td>
+                        <td className="px-6 py-4 text-indigo-950 text-base font-black">
+                          {formatNumber(liveQtySum)}
                         </td>
-                        <td className="px-6 py-4 font-bold text-slate-600">{formatCurrency(item.price)}</td>
-                        <td className="px-6 py-4 font-black text-slate-950">{formatCurrency(item.stock_value)}</td>
-                        <td className="px-6 py-4 text-right text-xs text-slate-400 font-semibold font-mono whitespace-nowrap">
-                          {formatDateTime(item.last_updated || item.updated_at || item.created_at)}
+                        <td className="px-6 py-4 text-slate-400">-</td>
+                        <td className="px-6 py-4 text-indigo-950 text-base font-black">
+                          {formatCurrency(liveValueSum)}
+                        </td>
+                        <td className="px-6 py-4 text-right text-xs text-indigo-600 font-bold whitespace-nowrap">
+                          Live Filtered
                         </td>
                       </tr>
-                    ))
+                    </>
                   ) : (
                     <tr>
                       <td colSpan={7} className="py-24 text-center text-slate-400 font-semibold">
@@ -909,29 +1078,37 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
               <table className="w-full text-slate-650 text-sm">
                 <thead className="bg-slate-50 text-[10px] uppercase font-bold tracking-wider text-slate-400 border-b border-slate-100">
                   <tr>
-                    <th className="px-6 py-4 text-left">Department Division Title</th>
-                    <th className="px-6 py-4 text-left">Valued Asset Sum (₹)</th>
-                    <th className="px-6 py-4 text-right">Investment Partition Percentage</th>
+                    {renderSortableHeader("Department Division Title", "department")}
+                    {renderSortableHeader("Valued Asset Sum (₹)", "stock_value")}
+                    <th className="px-6 py-4 text-right text-[10px] uppercase font-bold tracking-wider text-slate-400">Investment Partition Percentage</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {reportItems.length > 0 ? (
-                    reportItems.map((r, i) => {
-                      const totalSum = reportItems.reduce((s, it) => s + (it.stock_value || 0), 0);
-                      const pct = totalSum > 0 ? ((r.stock_value / totalSum) * 100).toFixed(2) : "0.00";
+                  {sortedAndFilteredItems.length > 0 ? (
+                    <>
+                      {sortedAndFilteredItems.map((r, i) => {
+                        const totalSum = sortedAndFilteredItems.reduce((s, it) => s + (it.stock_value || 0), 0);
+                        const pct = totalSum > 0 ? ((r.stock_value / totalSum) * 100).toFixed(2) : "0.00";
 
-                      return (
-                        <tr key={i} className="hover:bg-slate-50/60 transition-colors font-semibold">
-                          <td className="px-6 py-4 text-slate-900 font-bold">{r.department}</td>
-                          <td className="px-6 py-4 font-black text-slate-950">{formatCurrency(r.stock_value)}</td>
-                          <td className="px-6 py-4 text-right whitespace-nowrap">
-                            <span className="inline-flex px-3 py-1 bg-slate-100 text-slate-850 text-xs rounded-full border border-slate-200">
-                              {pct}%
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })
+                        return (
+                          <tr key={i} className="hover:bg-slate-50/60 transition-colors font-semibold">
+                            <td className="px-6 py-4 text-slate-900 font-bold">{r.department}</td>
+                            <td className="px-6 py-4 font-black text-slate-950">{formatCurrency(r.stock_value)}</td>
+                            <td className="px-6 py-4 text-right whitespace-nowrap">
+                              <span className="inline-flex px-3 py-1 bg-slate-100 text-slate-850 text-xs rounded-full border border-slate-200">
+                                {pct}%
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {/* Highlighted Footer Summary Row for dept_value */}
+                      <tr className="bg-indigo-50/30 font-extrabold border-t-2 border-indigo-100/80">
+                        <td className="px-6 py-4 text-slate-700 text-xs uppercase tracking-wider font-extrabold text-right">Summed Total Valuation:</td>
+                        <td className="px-6 py-4 text-indigo-950 text-base font-black">{formatCurrency(liveValueSum)}</td>
+                        <td className="px-6 py-4 text-right text-xs text-indigo-600 font-semibold font-mono">100.00%</td>
+                      </tr>
+                    </>
                   ) : (
                     <tr>
                       <td colSpan={3} className="py-16 text-center text-slate-400">
@@ -945,30 +1122,40 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
               <table className="w-full text-slate-650 text-sm">
                 <thead className="bg-slate-50 text-[10px] uppercase font-bold tracking-wider text-slate-400 border-b border-slate-100">
                   <tr>
-                    <th className="px-6 py-4 text-left">Timestamp</th>
-                    <th className="px-6 py-4 text-left">SKU</th>
-                    <th className="px-6 py-4 text-left">Date Received</th>
-                    <th className="px-6 py-4 text-left">Summed Inflow Qty</th>
-                    <th className="px-6 py-4 text-left">Item Name description</th>
-                    <th className="px-6 py-4 text-left">Estimated Asset Value</th>
-                    <th className="px-6 py-4 text-right">Department</th>
+                    {renderSortableHeader("Timestamp", "timestamp")}
+                    {renderSortableHeader("SKU", "sku")}
+                    {renderSortableHeader("Date Received", "date")}
+                    {renderSortableHeader("Summed Inflow Qty", "quantity")}
+                    {renderSortableHeader("Item Name description", "item_name")}
+                    {renderSortableHeader("Estimated Asset Value", "stock_value")}
+                    {renderSortableHeader("Department", "department", true)}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {reportItems.length > 0 ? (
-                    reportItems.map((item, i) => (
-                      <tr key={i} className="hover:bg-slate-50/60 transition-colors font-medium">
-                        <td className="px-6 py-4 text-xs font-semibold text-slate-400">
-                          {formatDateTime(item.timestamp)}
-                        </td>
-                        <td className="px-6 py-4 text-slate-900 font-bold whitespace-nowrap">{item.sku}</td>
-                        <td className="px-6 py-4 whitespace-nowrap">{formatDate(item.date)}</td>
-                        <td className="px-6 py-4 font-extrabold text-slate-800">{formatNumber(item.quantity)}</td>
-                        <td className="px-6 py-4 font-bold text-slate-900">{item.item_name}</td>
-                        <td className="px-6 py-4 font-black text-slate-950">{formatCurrency(item.stock_value)}</td>
-                        <td className="px-6 py-4 text-right text-xs text-slate-500 font-semibold">{item.department}</td>
+                  {sortedAndFilteredItems.length > 0 ? (
+                    <>
+                      {sortedAndFilteredItems.map((item, i) => (
+                        <tr key={i} className="hover:bg-slate-50/60 transition-colors font-medium">
+                          <td className="px-6 py-4 text-xs font-semibold text-slate-400">
+                            {formatDateTime(item.timestamp)}
+                          </td>
+                          <td className="px-6 py-4 text-slate-900 font-bold whitespace-nowrap">{item.sku}</td>
+                          <td className="px-6 py-4 whitespace-nowrap">{formatDate(item.date)}</td>
+                          <td className="px-6 py-4 font-extrabold text-slate-800">{formatNumber(item.quantity)}</td>
+                          <td className="px-6 py-4 font-bold text-slate-900">{item.item_name}</td>
+                          <td className="px-6 py-4 font-black text-slate-950">{formatCurrency(item.stock_value)}</td>
+                          <td className="px-6 py-4 text-right text-xs text-slate-500 font-semibold">{item.department}</td>
+                        </tr>
+                      ))}
+                      {/* Highlighted Footer Summary Row for in_but_not_out */}
+                      <tr className="bg-indigo-50/30 font-extrabold border-t-2 border-indigo-100/80">
+                        <td colSpan={3} className="px-6 py-4 text-slate-700 text-xs uppercase tracking-wider font-extrabold text-right">Summed Total:</td>
+                        <td className="px-6 py-4 text-indigo-950 text-base font-black">{formatNumber(liveQtySum)}</td>
+                        <td className="px-6 py-4 text-slate-400">-</td>
+                        <td className="px-6 py-4 text-indigo-950 text-base font-black">{formatCurrency(liveValueSum)}</td>
+                        <td className="px-6 py-4 text-right text-xs text-indigo-600 font-bold whitespace-nowrap">Live Filtered</td>
                       </tr>
-                    ))
+                    </>
                   ) : (
                     <tr>
                       <td colSpan={7} className="py-24 text-center text-slate-400">
@@ -982,36 +1169,47 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
               <table className="w-full text-slate-650 text-sm">
                 <thead className="bg-slate-50 text-[10px] uppercase font-bold tracking-wider text-slate-400 border-b border-slate-100">
                   <tr>
-                    <th className="px-6 py-4 text-left">Timestamp</th>
-                    <th className="px-6 py-4 text-left">SKU</th>
-                    <th className="px-6 py-4 text-left">Date Ordered</th>
-                    <th className="px-6 py-4 text-left">Quantity</th>
-                    <th className="px-6 py-4 text-left">Item Name description</th>
-                    <th className="px-6 py-4 text-left">Value (₹)</th>
-                    <th className="px-6 py-4 text-left">Department</th>
-                    <th className="px-6 py-4 text-right">Count Orders</th>
+                    {renderSortableHeader("Timestamp", "timestamp")}
+                    {renderSortableHeader("SKU", "sku")}
+                    {renderSortableHeader("Date Ordered", "date")}
+                    {renderSortableHeader("Quantity", "quantity")}
+                    {renderSortableHeader("Item Name description", "item_name")}
+                    {renderSortableHeader("Value (₹)", "stock_value")}
+                    {renderSortableHeader("Department", "department")}
+                    <th className="px-6 py-4 text-right text-[10px] uppercase font-bold tracking-wider text-slate-400">Count Orders</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {reportItems.length > 0 ? (
-                    reportItems.map((item, i) => (
-                      <tr key={i} className="hover:bg-slate-50/60 transition-colors font-medium">
-                        <td className="px-6 py-4 text-xs text-slate-400 font-semibold">
-                          {formatDateTime(item.timestamp)}
-                        </td>
-                        <td className="px-6 py-4 text-slate-900 font-bold whitespace-nowrap">{item.sku}</td>
-                        <td className="px-6 py-4 whitespace-nowrap">{formatDate(item.date)}</td>
-                        <td className="px-6 py-4 font-bold text-slate-800">{formatNumber(item.quantity)}</td>
-                        <td className="px-6 py-4 font-bold text-slate-900">{item.item_name}</td>
-                        <td className="px-6 py-4 font-extrabold text-slate-950">{formatCurrency(item.stock_value)}</td>
-                        <td className="px-6 py-4 text-slate-500 font-semibold">{item.department}</td>
-                        <td className="px-6 py-4 text-right font-black whitespace-nowrap">
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-100">
-                            {item.frequency} times ordered
-                          </span>
-                        </td>
+                  {sortedAndFilteredItems.length > 0 ? (
+                    <>
+                      {sortedAndFilteredItems.map((item, i) => (
+                        <tr key={i} className="hover:bg-slate-50/60 transition-colors font-medium">
+                          <td className="px-6 py-4 text-xs text-slate-400 font-semibold">
+                            {formatDateTime(item.timestamp)}
+                          </td>
+                          <td className="px-6 py-4 text-slate-900 font-bold whitespace-nowrap">{item.sku}</td>
+                          <td className="px-6 py-4 whitespace-nowrap">{formatDate(item.date)}</td>
+                          <td className="px-6 py-4 font-bold text-slate-800">{formatNumber(item.quantity)}</td>
+                          <td className="px-6 py-4 font-bold text-slate-900">{item.item_name}</td>
+                          <td className="px-6 py-4 font-extrabold text-slate-950">{formatCurrency(item.stock_value)}</td>
+                          <td className="px-6 py-4 text-slate-500 font-semibold">{item.department}</td>
+                          <td className="px-6 py-4 text-right font-black whitespace-nowrap">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-100">
+                              {item.frequency} times ordered
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                      {/* Highlighted Footer Summary Row for frequently_reordered */}
+                      <tr className="bg-indigo-50/30 font-extrabold border-t-2 border-indigo-100/80">
+                        <td colSpan={3} className="px-6 py-4 text-slate-700 text-xs uppercase tracking-wider font-extrabold text-right">Summed Total:</td>
+                        <td className="px-6 py-4 text-indigo-950 text-base font-black">{formatNumber(liveQtySum)}</td>
+                        <td className="px-6 py-4 text-slate-400">-</td>
+                        <td className="px-6 py-4 text-indigo-950 text-base font-black">{formatCurrency(liveValueSum)}</td>
+                        <td className="px-6 py-4 text-slate-500">-</td>
+                        <td className="px-6 py-4 text-right text-xs text-indigo-600 font-bold whitespace-nowrap">Live Filtered</td>
                       </tr>
-                    ))
+                    </>
                   ) : (
                     <tr>
                       <td colSpan={8} className="py-24 text-center text-slate-400">
@@ -1025,28 +1223,36 @@ export default function ReportsTab({ quickRunType, onClearQuickRun }: ReportsTab
               <table className="w-full text-slate-650 text-sm">
                 <thead className="bg-slate-50 text-[10px] uppercase font-bold tracking-wider text-slate-400 border-b border-slate-100">
                   <tr>
-                    <th className="px-6 py-4 text-left">SKU</th>
-                    <th className="px-6 py-4 text-left">Item Name description</th>
-                    <th className="px-6 py-4 text-left">Department division</th>
-                    <th className="px-6 py-4 text-left">Under physical qty</th>
-                    <th className="px-6 py-3.5 text-right">Summed valuation value (₹)</th>
+                    {renderSortableHeader("SKU", "sku")}
+                    {renderSortableHeader("Item Name description", "item_name")}
+                    {renderSortableHeader("Department division", "department")}
+                    {renderSortableHeader("Under physical qty", "quantity")}
+                    {renderSortableHeader("Summed valuation value (₹)", "stock_value", true)}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {reportItems.length > 0 ? (
-                    reportItems.map((r) => (
-                      <tr key={r.sku} className="hover:bg-slate-50/60 transition-colors font-medium">
-                        <td className="px-6 py-3.5 font-bold text-slate-900 whitespace-nowrap">{r.sku}</td>
-                        <td className="px-6 py-3 text-slate-900 font-bold max-w-sm">{r.item_name}</td>
-                        <td className="px-6 py-3.5 text-slate-500 font-semibold whitespace-nowrap">{r.department}</td>
-                        <td className="px-6 py-3.5 font-extrabold text-slate-800 whitespace-nowrap">
-                          {formatNumber(r.quantity)}
-                        </td>
-                        <td className="px-6 py-3.5 font-black text-slate-950 text-right whitespace-nowrap">
-                          {formatCurrency(r.stock_value)}
-                        </td>
+                  {sortedAndFilteredItems.length > 0 ? (
+                    <>
+                      {sortedAndFilteredItems.map((r) => (
+                        <tr key={r.sku} className="hover:bg-slate-50/60 transition-colors font-medium">
+                          <td className="px-6 py-3.5 font-bold text-slate-900 whitespace-nowrap">{r.sku}</td>
+                          <td className="px-6 py-3 text-slate-900 font-bold max-w-sm">{r.item_name}</td>
+                          <td className="px-6 py-3.5 text-slate-500 font-semibold whitespace-nowrap">{r.department}</td>
+                          <td className="px-6 py-3.5 font-extrabold text-slate-800 whitespace-nowrap">
+                            {formatNumber(r.quantity)}
+                          </td>
+                          <td className="px-6 py-3.5 font-black text-slate-950 text-right whitespace-nowrap">
+                            {formatCurrency(r.stock_value)}
+                          </td>
+                        </tr>
+                      ))}
+                      {/* Highlighted Footer Summary Row for Fallbacks */}
+                      <tr className="bg-indigo-50/30 font-extrabold border-t-2 border-indigo-100/80">
+                        <td colSpan={3} className="px-6 py-4 text-slate-700 text-xs uppercase tracking-wider font-extrabold text-right">Summed Total:</td>
+                        <td className="px-6 py-4 text-indigo-950 text-base font-black">{formatNumber(liveQtySum)}</td>
+                        <td className="px-6 py-4 text-indigo-950 text-base font-black text-right whitespace-nowrap">{formatCurrency(liveValueSum)}</td>
                       </tr>
-                    ))
+                    </>
                   ) : (
                     <tr>
                       <td colSpan={5} className="py-24 text-center text-slate-400">
